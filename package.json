@@ -13,7 +13,8 @@
     "start": "node dist/adapters/cli/index.js",
     "mcp": "node dist/adapters/cli/index.js mcp start",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "bench": "vitest bench"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
