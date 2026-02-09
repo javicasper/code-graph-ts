@@ -48,7 +48,7 @@ export function createAppServices(config: AppConfig): AppServices {
   ];
   const jobs = new InMemoryJobStore();
   const indexCode = new IndexCodeService(graph, fs, parsers, jobs, logger);
-  const searchCode = new SearchCodeService(graph);
+  const searchCode = new SearchCodeService(graph, logger);
   const analyzeCode = new AnalyzeCodeService(graph);
   const watchFiles = new WatchFilesService(indexCode, logger);
   const manageRepos = new ManageRepositoriesService(graph);

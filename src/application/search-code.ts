@@ -1,8 +1,12 @@
-import type { SearchCode, GraphReader } from "../domain/ports.js";
+import type { SearchCode, GraphReader, Logger } from "../domain/ports.js";
 import type { SearchResult } from "../domain/types.js";
+import { toNumber } from "../domain/neo4j-helpers.js";
 
 export class SearchCodeService implements SearchCode {
-  constructor(private readonly graph: GraphReader) {}
+  constructor(
+    private readonly graph: GraphReader,
+    private readonly logger?: Logger,
+  ) {}
 
   async fulltextSearch(query: string, limit: number): Promise<SearchResult[]> {
     try {
@@ -22,7 +26,7 @@ export class SearchCodeService implements SearchCode {
         score: r.score as number | undefined,
       }));
     } catch {
-      // Fulltext index may not exist; fall back to CONTAINS
+      this.logger?.warn("Fulltext index not available, falling back to CONTAINS search");
       const rows = await this.graph.runQuery(
         `MATCH (n) WHERE (n:Function OR n:Class OR n:Variable) AND n.name CONTAINS $query
          RETURN labels(n) as labels, n.name as name, n.path as path, n.line_number as line_number
@@ -56,11 +60,4 @@ export class SearchCodeService implements SearchCode {
     }
     return this.graph.runQuery(query, params);
   }
-}
-
-function toNumber(val: unknown): number | undefined {
-  if (val == null) return undefined;
-  if (typeof val === "number") return val;
-  if (typeof (val as any).toNumber === "function") return (val as any).toNumber();
-  return Number(val);
 }

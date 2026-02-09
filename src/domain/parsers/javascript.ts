@@ -23,12 +23,11 @@ export class JavaScriptParser extends BaseParser {
 
   parse(sourceCode: string, filePath: string, isDependency = false): ParsedFile {
     const tree = this.parseSource(sourceCode);
-    const repoPath = "";
-    const result = this.emptyParsedFile(filePath, repoPath);
+    const result = this.emptyParsedFile(filePath);
     const root = tree.rootNode;
 
-    this.extractFunctions(root, result, sourceCode, isDependency);
-    this.extractClasses(root, result, sourceCode, isDependency);
+    this.extractFunctions(root, result, isDependency);
+    this.extractClasses(root, result, isDependency);
     this.extractImports(root, result);
     this.extractCalls(root, result);
     if (!isDependency) {
@@ -45,10 +44,8 @@ export class JavaScriptParser extends BaseParser {
       const tree = this.parseSource(sourceCode);
       const root = tree.rootNode;
 
-      // Collect exported symbols
       this.collectExportedSymbols(root, filePath, map);
 
-      // Also collect top-level function/class declarations as potential exports
       for (const node of root.descendantsOfType("function_declaration")) {
         const name = this.getFieldText(node, "name");
         if (name) {
@@ -75,16 +72,13 @@ export class JavaScriptParser extends BaseParser {
   protected extractFunctions(
     root: TreeSitter.SyntaxNode,
     result: ParsedFile,
-    source: string,
     isDependency: boolean,
   ): void {
-    // function declarations
     for (const node of root.descendantsOfType("function_declaration")) {
-      const fn = this.parseFunctionDeclaration(node, source, isDependency);
+      const fn = this.parseFunctionDeclaration(node, isDependency);
       if (fn) result.functions.push(fn);
     }
 
-    // Arrow functions and function expressions assigned to variables
     for (const node of root.descendantsOfType("variable_declarator")) {
       const valueNode = node.childForFieldName("value");
       if (
@@ -93,21 +87,19 @@ export class JavaScriptParser extends BaseParser {
           valueNode.type === "function_expression" ||
           valueNode.type === "function")
       ) {
-        const fn = this.parseVariableFunction(node, valueNode, source, isDependency);
+        const fn = this.parseVariableFunction(node, valueNode, isDependency);
         if (fn) result.functions.push(fn);
       }
     }
 
-    // Method definitions (inside classes)
     for (const node of root.descendantsOfType("method_definition")) {
-      const fn = this.parseMethodDefinition(node, source, isDependency);
+      const fn = this.parseMethodDefinition(node, isDependency);
       if (fn) result.functions.push(fn);
     }
   }
 
   protected parseFunctionDeclaration(
     node: TreeSitter.SyntaxNode,
-    source: string,
     isDependency: boolean,
   ): ParsedFunction | null {
     const name = this.getFieldText(node, "name");
@@ -135,7 +127,6 @@ export class JavaScriptParser extends BaseParser {
   protected parseVariableFunction(
     varNode: TreeSitter.SyntaxNode,
     fnNode: TreeSitter.SyntaxNode,
-    source: string,
     isDependency: boolean,
   ): ParsedFunction | null {
     const name = this.getFieldText(varNode, "name");
@@ -162,7 +153,6 @@ export class JavaScriptParser extends BaseParser {
 
   protected parseMethodDefinition(
     node: TreeSitter.SyntaxNode,
-    source: string,
     isDependency: boolean,
   ): ParsedFunction | null {
     const name = this.getFieldText(node, "name");
@@ -180,7 +170,6 @@ export class JavaScriptParser extends BaseParser {
     else if (firstChild?.text === "static") kind = "static";
     if (name === "constructor") kind = "constructor";
 
-    // Decorators (experimental syntax)
     const decorators: string[] = [];
     const prev = node.previousNamedSibling;
     if (prev?.type === "decorator") {
@@ -207,19 +196,17 @@ export class JavaScriptParser extends BaseParser {
   protected extractClasses(
     root: TreeSitter.SyntaxNode,
     result: ParsedFile,
-    source: string,
     isDependency: boolean,
   ): void {
     for (const node of root.descendantsOfType("class_declaration")) {
-      const cls = this.parseClassNode(node, source, isDependency);
+      const cls = this.parseClassNode(node, isDependency);
       if (cls) result.classes.push(cls);
     }
-    // Class expressions: const Foo = class { }
     for (const node of root.descendantsOfType("class")) {
       if (node.type === "class" && node.parent?.type === "variable_declarator") {
         const name = this.getFieldText(node.parent, "name");
         if (name) {
-          const cls = this.parseClassNode(node, source, isDependency, name);
+          const cls = this.parseClassNode(node, isDependency, name);
           if (cls) result.classes.push(cls);
         }
       }
@@ -228,7 +215,6 @@ export class JavaScriptParser extends BaseParser {
 
   protected parseClassNode(
     node: TreeSitter.SyntaxNode,
-    source: string,
     isDependency: boolean,
     overrideName?: string,
   ): ParsedClass | null {
@@ -236,7 +222,6 @@ export class JavaScriptParser extends BaseParser {
     if (!name) return null;
 
     const bases: string[] = [];
-    // extends clause
     const heritage = node.descendantsOfType("class_heritage");
     for (const h of heritage) {
       for (let i = 0; i < h.childCount; i++) {
@@ -265,12 +250,10 @@ export class JavaScriptParser extends BaseParser {
     root: TreeSitter.SyntaxNode,
     result: ParsedFile,
   ): void {
-    // ES imports
     for (const node of root.descendantsOfType("import_statement")) {
       this.parseImportStatement(node, result);
     }
 
-    // require() calls
     for (const node of root.descendantsOfType("call_expression")) {
       const fn = node.childForFieldName("function");
       if (fn?.text === "require") {
@@ -279,9 +262,7 @@ export class JavaScriptParser extends BaseParser {
           const srcNode = args.namedChild(0)!;
           const source = srcNode.text.replace(/['"]/g, "");
           let name = source;
-          if (
-            node.parent?.type === "variable_declarator"
-          ) {
+          if (node.parent?.type === "variable_declarator") {
             name = this.getFieldText(node.parent, "name") ?? source;
           }
           result.imports.push({
@@ -311,12 +292,7 @@ export class JavaScriptParser extends BaseParser {
           const part = child.namedChild(j)!;
 
           if (part.type === "identifier") {
-            result.imports.push({
-              name: part.text,
-              source,
-              lineNumber,
-              isDefault: true,
-            });
+            result.imports.push({ name: part.text, source, lineNumber, isDefault: true });
           } else if (part.type === "named_imports") {
             for (const spec of part.descendantsOfType("import_specifier")) {
               const importedName = this.getFieldText(spec, "name");
@@ -333,12 +309,7 @@ export class JavaScriptParser extends BaseParser {
           } else if (part.type === "namespace_import") {
             const name = part.namedChild(0)?.text;
             if (name) {
-              result.imports.push({
-                name,
-                source,
-                lineNumber,
-                isNamespace: true,
-              });
+              result.imports.push({ name, source, lineNumber, isNamespace: true });
             }
           }
         }
@@ -357,7 +328,6 @@ export class JavaScriptParser extends BaseParser {
       if (call) result.calls.push(call);
     }
 
-    // new expressions
     for (const node of root.descendantsOfType("new_expression")) {
       const constructor = node.childForFieldName("constructor");
       if (constructor) {
@@ -398,7 +368,6 @@ export class JavaScriptParser extends BaseParser {
       name = fnNode.text;
     }
 
-    // Skip require() — handled in imports
     if (name === "require") return null;
 
     const argsNode = node.childForFieldName("arguments");
@@ -443,8 +412,7 @@ export class JavaScriptParser extends BaseParser {
 
       let type: string | undefined;
       if (node.parent?.type === "lexical_declaration") {
-        const keyword = node.parent.child(0)?.text;
-        type = keyword;
+        type = node.parent.child(0)?.text;
       } else if (node.parent?.type === "variable_declaration") {
         type = "var";
       }

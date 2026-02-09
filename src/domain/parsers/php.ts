@@ -23,13 +23,12 @@ export class PHPParser extends BaseParser {
 
   parse(sourceCode: string, filePath: string, isDependency = false): ParsedFile {
     const tree = this.parseSource(sourceCode);
-    const repoPath = "";
-    const result = this.emptyParsedFile(filePath, repoPath);
+    const result = this.emptyParsedFile(filePath);
     result.lang = "php";
     const root = tree.rootNode;
 
-    this.extractFunctions(root, result, sourceCode, isDependency);
-    this.extractClasses(root, result, sourceCode, isDependency);
+    this.extractFunctions(root, result, isDependency);
+    this.extractClasses(root, result, isDependency);
     this.extractImports(root, result);
     this.extractCalls(root, result);
     if (!isDependency) {
@@ -91,22 +90,20 @@ export class PHPParser extends BaseParser {
   private extractFunctions(
     root: TreeSitter.SyntaxNode,
     result: ParsedFile,
-    source: string,
     isDependency: boolean,
   ): void {
     for (const node of root.descendantsOfType("function_definition")) {
-      const fn = this.parsePHPFunction(node, source, isDependency);
+      const fn = this.parsePHPFunction(node, isDependency);
       if (fn) result.functions.push(fn);
     }
     for (const node of root.descendantsOfType("method_declaration")) {
-      const fn = this.parsePHPMethod(node, source, isDependency);
+      const fn = this.parsePHPMethod(node, isDependency);
       if (fn) result.functions.push(fn);
     }
   }
 
   private parsePHPFunction(
     node: TreeSitter.SyntaxNode,
-    source: string,
     isDependency: boolean,
   ): ParsedFunction | null {
     const name = this.getFieldText(node, "name");
@@ -131,7 +128,6 @@ export class PHPParser extends BaseParser {
 
   private parsePHPMethod(
     node: TreeSitter.SyntaxNode,
-    source: string,
     isDependency: boolean,
   ): ParsedFunction | null {
     const name = this.getFieldText(node, "name");
@@ -171,26 +167,24 @@ export class PHPParser extends BaseParser {
   private extractClasses(
     root: TreeSitter.SyntaxNode,
     result: ParsedFile,
-    source: string,
     isDependency: boolean,
   ): void {
     for (const node of root.descendantsOfType("class_declaration")) {
-      const cls = this.parsePHPClass(node, source, isDependency);
+      const cls = this.parsePHPClass(node, isDependency);
       if (cls) result.classes.push(cls);
     }
     for (const node of root.descendantsOfType("interface_declaration")) {
-      const cls = this.parsePHPInterface(node, source, isDependency);
+      const cls = this.parsePHPInterface(node, isDependency);
       if (cls) result.classes.push(cls);
     }
     for (const node of root.descendantsOfType("trait_declaration")) {
-      const cls = this.parsePHPTrait(node, source, isDependency);
+      const cls = this.parsePHPTrait(node, isDependency);
       if (cls) result.classes.push(cls);
     }
   }
 
   private parsePHPClass(
     node: TreeSitter.SyntaxNode,
-    source: string,
     isDependency: boolean,
   ): ParsedClass | null {
     const name = this.getFieldText(node, "name");
@@ -238,7 +232,6 @@ export class PHPParser extends BaseParser {
 
   private parsePHPInterface(
     node: TreeSitter.SyntaxNode,
-    source: string,
     isDependency: boolean,
   ): ParsedClass | null {
     const name = this.getFieldText(node, "name");
@@ -268,7 +261,6 @@ export class PHPParser extends BaseParser {
 
   private parsePHPTrait(
     node: TreeSitter.SyntaxNode,
-    source: string,
     isDependency: boolean,
   ): ParsedClass | null {
     const name = this.getFieldText(node, "name");

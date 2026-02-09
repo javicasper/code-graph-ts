@@ -6,6 +6,7 @@ import type {
   ImporterResult,
   ComplexityResult,
 } from "../domain/types.js";
+import { toNumber } from "../domain/neo4j-helpers.js";
 
 export class AnalyzeCodeService implements AnalyzeCode {
   constructor(private readonly graph: GraphReader) {}
@@ -56,7 +57,7 @@ export class AnalyzeCodeService implements AnalyzeCode {
     const rows = await this.graph.runQuery(
       `MATCH (f:Function)
        WHERE NOT ()-[:CALLS]->(f) ${where}
-         AND f.kind IS NULL OR f.kind <> 'constructor'
+         AND (f.kind IS NULL OR f.kind <> 'constructor')
        RETURN f.name as name, f.path as path, f.line_number as line_number
        LIMIT $limit`,
       { limit, repoPath },
@@ -154,11 +155,4 @@ export class AnalyzeCodeService implements AnalyzeCode {
       complexity: toNumber(r.complexity),
     }));
   }
-}
-
-function toNumber(val: unknown): number | undefined {
-  if (val == null) return undefined;
-  if (typeof val === "number") return val;
-  if (typeof (val as any).toNumber === "function") return (val as any).toNumber();
-  return Number(val);
 }

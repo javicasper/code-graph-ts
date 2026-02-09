@@ -23,13 +23,12 @@ export class TypeScriptParser extends JavaScriptParser {
     // Single parse — reuse the tree for both base JS extraction and TS-specific
     const tree = this.parseSource(sourceCode);
     const root = tree.rootNode;
-    const repoPath = "";
-    const result = this.emptyParsedFile(filePath, repoPath);
+    const result = this.emptyParsedFile(filePath);
     result.lang = "typescript";
 
     // Base JS extractions using the already-parsed tree
-    this.extractFunctions(root, result, sourceCode, isDependency);
-    this.extractClasses(root, result, sourceCode, isDependency);
+    this.extractFunctions(root, result, isDependency);
+    this.extractClasses(root, result, isDependency);
     this.extractImports(root, result);
     this.extractCalls(root, result);
     if (!isDependency) {

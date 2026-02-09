@@ -166,6 +166,17 @@ export function createToolHandler(services: AppServices) {
     name: string,
     args: Record<string, unknown>,
   ): Promise<unknown> {
+    try {
+      return await dispatch(name, args);
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : String(err) };
+    }
+  };
+
+  async function dispatch(
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<unknown> {
     switch (name) {
       case "add_code_to_graph": {
         const dirPath = resolve(args.path as string);
@@ -197,11 +208,7 @@ export function createToolHandler(services: AppServices) {
       case "execute_cypher_query": {
         const query = args.query as string;
         const params = (args.params as Record<string, unknown>) ?? {};
-        try {
-          return await searchCode.cypherQuery(query, params);
-        } catch (err) {
-          return { error: err instanceof Error ? err.message : String(err) };
-        }
+        return searchCode.cypherQuery(query, params);
       }
 
       case "watch_directory": {
@@ -264,7 +271,7 @@ export function createToolHandler(services: AppServices) {
       default:
         return { error: `Unknown tool: ${name}` };
     }
-  };
+  }
 }
 
 // ── Analysis dispatcher ─────────────────────────────────────────

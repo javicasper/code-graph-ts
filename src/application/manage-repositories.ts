@@ -1,5 +1,6 @@
 import type { ManageRepositories, GraphRepository } from "../domain/ports.js";
 import type { GraphStats } from "../domain/types.js";
+import { toCount } from "../domain/neo4j-helpers.js";
 
 export class ManageRepositoriesService implements ManageRepositories {
   constructor(private readonly graph: GraphRepository) {}
@@ -50,12 +51,4 @@ export class ManageRepositoriesService implements ManageRepositories {
       relationships: toCount(rels),
     };
   }
-}
-
-function toCount(rows: Record<string, unknown>[]): number {
-  const val = rows[0]?.c;
-  if (val == null) return 0;
-  if (typeof val === "number") return val;
-  if (typeof (val as any).toNumber === "function") return (val as any).toNumber();
-  return Number(val);
 }

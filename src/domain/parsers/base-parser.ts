@@ -153,11 +153,11 @@ export abstract class BaseParser implements LanguageParser {
     return this.languageName as SupportedLanguage;
   }
 
-  /** Create an empty ParsedFile. */
-  protected emptyParsedFile(filePath: string, repoPath: string): ParsedFile {
+  /** Create an empty ParsedFile. repoPath is set later by IndexCodeService. */
+  protected emptyParsedFile(filePath: string): ParsedFile {
     return {
       path: filePath,
-      repoPath,
+      repoPath: "",
       lang: this.langFromPath(filePath),
       functions: [],
       classes: [],

@@ -310,7 +310,8 @@ export class IndexCodeService implements IndexCode {
       let sourceCode: string;
       try {
         sourceCode = this.fs.readFile(f);
-      } catch {
+      } catch (err) {
+        this.logger.warn(`Skipping unreadable file in preScan: ${f}`, err);
         continue;
       }
       if (!parserFiles.has(parser)) parserFiles.set(parser, []);
