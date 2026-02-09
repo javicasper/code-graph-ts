@@ -4,8 +4,7 @@ import { JavaScriptParser } from "./javascript.js";
 import type {
   ParsedFile,
   ParsedClass,
-  ParsedFunction,
-} from "../core/types.js";
+} from "../types.js";
 
 const require = createRequire(import.meta.url);
 
@@ -20,19 +19,27 @@ export class TypeScriptParser extends JavaScriptParser {
 
   // ── Overrides ───────────────────────────────────────────────
 
-  override parse(filePath: string, isDependency = false): ParsedFile {
-    const result = super.parse(filePath, isDependency);
+  override parse(sourceCode: string, filePath: string, isDependency = false): ParsedFile {
+    // Single parse — reuse the tree for both base JS extraction and TS-specific
+    const tree = this.parseSource(sourceCode);
+    const root = tree.rootNode;
+    const repoPath = "";
+    const result = this.emptyParsedFile(filePath, repoPath);
     result.lang = "typescript";
 
-    // Also extract TS-specific constructs
-    const { tree } = this.readAndParse(filePath);
-    const root = tree.rootNode;
+    // Base JS extractions using the already-parsed tree
+    this.extractFunctions(root, result, sourceCode, isDependency);
+    this.extractClasses(root, result, sourceCode, isDependency);
+    this.extractImports(root, result);
+    this.extractCalls(root, result);
+    if (!isDependency) {
+      this.extractVariables(root, result);
+    }
 
+    // TS-specific extractions (same tree, no re-parse)
     this.extractInterfaces(root, result, isDependency);
     this.extractAbstractClasses(root, result, isDependency);
     this.extractTypeAliases(root, result);
-
-    // Re-parse classes to pick up implements clauses
     this.augmentClassesWithImplements(root, result);
 
     return result;
@@ -50,7 +57,6 @@ export class TypeScriptParser extends JavaScriptParser {
       if (!name) continue;
 
       const bases: string[] = [];
-      // extends clause on interface
       const extendsClause = node.descendantsOfType("extends_type_clause");
       for (const ext of extendsClause) {
         for (let i = 0; i < ext.namedChildCount; i++) {
@@ -64,7 +70,6 @@ export class TypeScriptParser extends JavaScriptParser {
         }
       }
 
-      // Avoid duplicates (interface may have already been captured as class)
       if (result.classes.some((c) => c.name === name && c.lineNumber === node.startPosition.row + 1)) {
         continue;
       }
@@ -90,9 +95,7 @@ export class TypeScriptParser extends JavaScriptParser {
       const name = this.getFieldText(node, "name");
       if (!name) continue;
 
-      // Check if already captured
       if (result.classes.some((c) => c.name === name && c.lineNumber === node.startPosition.row + 1)) {
-        // Update isAbstract flag
         const existing = result.classes.find(
           (c) => c.name === name && c.lineNumber === node.startPosition.row + 1,
         );
@@ -144,7 +147,6 @@ export class TypeScriptParser extends JavaScriptParser {
     root: TreeSitter.SyntaxNode,
     result: ParsedFile,
   ): void {
-    // Look for class declarations with implements clause
     const classTypes = [
       ...root.descendantsOfType("class_declaration"),
       ...root.descendantsOfType("abstract_class_declaration"),
@@ -159,7 +161,6 @@ export class TypeScriptParser extends JavaScriptParser {
       );
       if (!cls) continue;
 
-      // Find implements clause nodes
       const implNodes = node.descendantsOfType("implements_clause");
       if (implNodes.length === 0) continue;
 
@@ -172,7 +173,6 @@ export class TypeScriptParser extends JavaScriptParser {
             child.type === "identifier" ||
             child.type === "generic_type"
           ) {
-            // For generic_type, get just the name
             if (child.type === "generic_type") {
               const typeName = child.namedChild(0)?.text;
               if (typeName) impls.push(typeName);
@@ -189,7 +189,6 @@ export class TypeScriptParser extends JavaScriptParser {
     }
   }
 
-  // Override param extraction to handle TS-specific types
   protected override extractParamNames(paramsNode: TreeSitter.SyntaxNode): string[] {
     const names: string[] = [];
     for (let i = 0; i < paramsNode.namedChildCount; i++) {

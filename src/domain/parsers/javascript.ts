@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import type TreeSitter from "tree-sitter";
 import { BaseParser } from "./base-parser.js";
@@ -6,11 +5,9 @@ import type {
   ParsedFile,
   ParsedFunction,
   ParsedClass,
-  ParsedImport,
   ParsedCall,
-  ParsedVariable,
   ImportsMap,
-} from "../core/types.js";
+} from "../types.js";
 
 const require = createRequire(import.meta.url);
 
@@ -19,20 +16,19 @@ export class JavaScriptParser extends BaseParser {
   readonly languageName: string = "javascript";
 
   constructor(language?: unknown) {
-    // Allow subclass to pass its own grammar
     super(language ?? require("tree-sitter-javascript"));
   }
 
   // ── Public API ──────────────────────────────────────────────
 
-  parse(filePath: string, isDependency = false): ParsedFile {
-    const { source, tree } = this.readAndParse(filePath);
+  parse(sourceCode: string, filePath: string, isDependency = false): ParsedFile {
+    const tree = this.parseSource(sourceCode);
     const repoPath = "";
     const result = this.emptyParsedFile(filePath, repoPath);
     const root = tree.rootNode;
 
-    this.extractFunctions(root, result, source, isDependency);
-    this.extractClasses(root, result, source, isDependency);
+    this.extractFunctions(root, result, sourceCode, isDependency);
+    this.extractClasses(root, result, sourceCode, isDependency);
     this.extractImports(root, result);
     this.extractCalls(root, result);
     if (!isDependency) {
@@ -42,17 +38,11 @@ export class JavaScriptParser extends BaseParser {
     return result;
   }
 
-  preScan(files: string[]): ImportsMap {
+  preScan(files: { filePath: string; sourceCode: string }[]): ImportsMap {
     const map: ImportsMap = new Map();
 
-    for (const filePath of files) {
-      let source: string;
-      try {
-        source = readFileSync(filePath, "utf-8");
-      } catch {
-        continue;
-      }
-      const tree = this.parseSource(source);
+    for (const { filePath, sourceCode } of files) {
+      const tree = this.parseSource(sourceCode);
       const root = tree.rootNode;
 
       // Collect exported symbols
@@ -249,7 +239,6 @@ export class JavaScriptParser extends BaseParser {
     // extends clause
     const heritage = node.descendantsOfType("class_heritage");
     for (const h of heritage) {
-      // The extends expression is the child
       for (let i = 0; i < h.childCount; i++) {
         const child = h.child(i)!;
         if (child.type !== "extends" && child.type !== "implements") {
@@ -289,7 +278,6 @@ export class JavaScriptParser extends BaseParser {
         if (args && args.namedChildCount > 0) {
           const srcNode = args.namedChild(0)!;
           const source = srcNode.text.replace(/['"]/g, "");
-          // Check if it's assigned to a variable
           let name = source;
           if (
             node.parent?.type === "variable_declarator"
@@ -315,9 +303,6 @@ export class JavaScriptParser extends BaseParser {
     const source = sourceNode.text.replace(/['"]/g, "");
     const lineNumber = node.startPosition.row + 1;
 
-    // import defaultExport from '...'
-    // import { named } from '...'
-    // import * as ns from '...'
     for (let i = 0; i < node.namedChildCount; i++) {
       const child = node.namedChild(i)!;
 
@@ -326,7 +311,6 @@ export class JavaScriptParser extends BaseParser {
           const part = child.namedChild(j)!;
 
           if (part.type === "identifier") {
-            // default import
             result.imports.push({
               name: part.text,
               source,
@@ -440,7 +424,6 @@ export class JavaScriptParser extends BaseParser {
   ): void {
     for (const node of root.descendantsOfType("variable_declarator")) {
       const valueNode = node.childForFieldName("value");
-      // Skip function expressions — already captured
       if (
         valueNode &&
         (valueNode.type === "arrow_function" ||
@@ -458,7 +441,6 @@ export class JavaScriptParser extends BaseParser {
       const context = this.findEnclosingFunction(node)?.name;
       const classContext = this.findEnclosingClass(node);
 
-      // Determine declaration kind from parent (const/let/var)
       let type: string | undefined;
       if (node.parent?.type === "lexical_declaration") {
         const keyword = node.parent.child(0)?.text;
@@ -470,7 +452,7 @@ export class JavaScriptParser extends BaseParser {
       result.variables.push({
         name,
         lineNumber: node.startPosition.row + 1,
-        value: value?.substring(0, 200), // truncate long values
+        value: value?.substring(0, 200),
         type,
         context,
         classContext,
@@ -495,11 +477,9 @@ export class JavaScriptParser extends BaseParser {
         param.type === "required_parameter" ||
         param.type === "optional_parameter"
       ) {
-        // TypeScript parameters
         const pattern = param.childForFieldName("pattern");
         if (pattern) names.push(pattern.text);
       } else {
-        // Destructuring or other patterns
         names.push(param.text);
       }
     }
@@ -510,7 +490,7 @@ export class JavaScriptParser extends BaseParser {
     const args: string[] = [];
     for (let i = 0; i < argsNode.namedChildCount; i++) {
       const arg = argsNode.namedChild(i)!;
-      args.push(arg.text.substring(0, 100)); // truncate long args
+      args.push(arg.text.substring(0, 100));
     }
     return args;
   }
@@ -520,9 +500,6 @@ export class JavaScriptParser extends BaseParser {
     filePath: string,
     map: ImportsMap,
   ): void {
-    // export function foo() {}
-    // export class Bar {}
-    // export default function() {}
     for (const node of root.descendantsOfType("export_statement")) {
       const declaration = node.childForFieldName("declaration");
       if (declaration) {
@@ -533,7 +510,6 @@ export class JavaScriptParser extends BaseParser {
           map.get(name)!.push({ filePath, lineNumber });
         }
       }
-      // export { name1, name2 }
       for (const spec of node.descendantsOfType("export_specifier")) {
         const name = this.getFieldText(spec, "name");
         if (name) {

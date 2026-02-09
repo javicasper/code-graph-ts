@@ -1,64 +1,29 @@
 import { resolve, dirname, basename, relative, extname } from "node:path";
-import { globby } from "globby";
 import ignore from "ignore";
-import { readFileSync, existsSync } from "node:fs";
-import { Database, getDatabase } from "./database.js";
+import type {
+  IndexCode,
+  GraphRepository,
+  FileSystem,
+  JobStore,
+  Logger,
+} from "../domain/ports.js";
 import type {
   LanguageParser,
   ParsedFile,
   ImportsMap,
   IndexJob,
-  GraphStats,
-} from "./types.js";
-import { JavaScriptParser } from "../parsers/javascript.js";
-import { TypeScriptParser } from "../parsers/typescript.js";
-import { PHPParser } from "../parsers/php.js";
+} from "../domain/types.js";
+import { resolveSymbol } from "../domain/symbol-resolver.js";
 
-// ── Parser registry ─────────────────────────────────────────────
+export class IndexCodeService implements IndexCode {
+  constructor(
+    private readonly graph: GraphRepository,
+    private readonly fs: FileSystem,
+    private readonly parsers: LanguageParser[],
+    private readonly jobs: JobStore,
+    private readonly logger: Logger,
+  ) {}
 
-function createParsers(): LanguageParser[] {
-  return [
-    new JavaScriptParser(),
-    new TypeScriptParser("typescript"),
-    new PHPParser(),
-  ];
-}
-
-function getParserForFile(
-  parsers: LanguageParser[],
-  filePath: string,
-): LanguageParser | undefined {
-  const ext = extname(filePath).toLowerCase();
-  return parsers.find((p) => p.supportedExtensions.includes(ext));
-}
-
-// ── Job tracking ────────────────────────────────────────────────
-
-const jobs = new Map<string, IndexJob>();
-
-export function getJob(id: string): IndexJob | undefined {
-  return jobs.get(id);
-}
-
-export function getAllJobs(): IndexJob[] {
-  return Array.from(jobs.values());
-}
-
-// ── Graph Builder ───────────────────────────────────────────────
-
-export class GraphBuilder {
-  private db: Database;
-  private parsers: LanguageParser[];
-
-  constructor(db?: Database) {
-    this.db = db ?? getDatabase();
-    this.parsers = createParsers();
-  }
-
-  /**
-   * Index a directory: pre-scan → parse & insert → link relationships.
-   * Returns a job ID for status tracking.
-   */
   async indexDirectory(
     dirPath: string,
     isDependency = false,
@@ -73,18 +38,16 @@ export class GraphBuilder {
       filesProcessed: 0,
       startedAt: new Date(),
     };
-    jobs.set(jobId, job);
+    this.jobs.create(job);
 
     try {
-      await this.db.ensureSchema();
+      await this.graph.ensureSchema();
 
-      // Collect files
       const files = await this.collectFiles(absPath);
-      job.filesTotal = files.length;
+      this.jobs.update(jobId, { filesTotal: files.length });
 
       if (files.length === 0) {
-        job.status = "completed";
-        job.completedAt = new Date();
+        this.jobs.update(jobId, { status: "completed", completedAt: new Date() });
         return jobId;
       }
 
@@ -98,9 +61,10 @@ export class GraphBuilder {
           const parsed = await this.indexFile(filePath, absPath, importsMap, isDependency);
           if (parsed) allParsedFiles.push(parsed);
         } catch (err) {
-          console.error(`Error parsing ${filePath}:`, err);
+          this.logger.error(`Error parsing ${filePath}:`, err);
         }
-        job.filesProcessed++;
+        const current = this.jobs.get(jobId);
+        this.jobs.update(jobId, { filesProcessed: (current?.filesProcessed ?? 0) + 1 });
       }
 
       // Phase 3: Link relationships (calls, inheritance)
@@ -109,41 +73,40 @@ export class GraphBuilder {
           await this.createInheritanceLinks(parsed, importsMap);
           await this.createCallLinks(parsed, importsMap, allParsedFiles);
         } catch (err) {
-          console.error(`Error linking ${parsed.path}:`, err);
+          this.logger.error(`Error linking ${parsed.path}:`, err);
         }
       }
 
-      job.status = "completed";
-      job.completedAt = new Date();
+      this.jobs.update(jobId, { status: "completed", completedAt: new Date() });
     } catch (err) {
-      job.status = "failed";
-      job.error = String(err);
-      job.completedAt = new Date();
+      this.jobs.update(jobId, {
+        status: "failed",
+        error: String(err),
+        completedAt: new Date(),
+      });
     }
 
     return jobId;
   }
 
-  /**
-   * Index a single file, inserting nodes into the graph.
-   */
   async indexFile(
     filePath: string,
     repoPath: string,
     importsMap: ImportsMap,
     isDependency = false,
   ): Promise<ParsedFile | null> {
-    const parser = getParserForFile(this.parsers, filePath);
+    const parser = this.getParserForFile(filePath);
     if (!parser) return null;
 
-    const parsed = parser.parse(filePath, isDependency);
+    const sourceCode = this.fs.readFile(filePath);
+    const parsed = parser.parse(sourceCode, filePath, isDependency);
     parsed.repoPath = repoPath;
 
     // Remove existing file nodes (for re-indexing)
-    await this.db.deleteFileNodes(filePath);
+    await this.graph.deleteFileNodes(filePath);
 
     // Insert repository node
-    await this.db.mergeNode("Repository", { path: repoPath }, {
+    await this.graph.mergeNode("Repository", { path: repoPath }, {
       name: basename(repoPath),
     });
 
@@ -154,17 +117,17 @@ export class GraphBuilder {
     for (const part of dirParts) {
       const parentDir = currentDir;
       currentDir = resolve(currentDir, part);
-      await this.db.mergeNode("Directory", { path: currentDir }, {
+      await this.graph.mergeNode("Directory", { path: currentDir }, {
         name: part,
       });
       if (parentDir === repoPath) {
-        await this.db.mergeRelationship(
+        await this.graph.mergeRelationship(
           "Repository", { path: repoPath },
           "Directory", { path: currentDir },
           "CONTAINS_DIR",
         );
       } else {
-        await this.db.mergeRelationship(
+        await this.graph.mergeRelationship(
           "Directory", { path: parentDir },
           "Directory", { path: currentDir },
           "CONTAINS_DIR",
@@ -173,7 +136,7 @@ export class GraphBuilder {
     }
 
     // Insert file node
-    await this.db.mergeNode("File", { path: filePath }, {
+    await this.graph.mergeNode("File", { path: filePath }, {
       name: basename(filePath),
       lang: parsed.lang,
       repo_path: repoPath,
@@ -181,13 +144,13 @@ export class GraphBuilder {
 
     // File → Directory or Repository
     if (dirParts.length > 0) {
-      await this.db.mergeRelationship(
+      await this.graph.mergeRelationship(
         "Directory", { path: currentDir },
         "File", { path: filePath },
         "CONTAINS_FILE",
       );
     } else {
-      await this.db.mergeRelationship(
+      await this.graph.mergeRelationship(
         "Repository", { path: repoPath },
         "File", { path: filePath },
         "CONTAINS_FILE",
@@ -196,7 +159,7 @@ export class GraphBuilder {
 
     // Insert functions
     for (const fn of parsed.functions) {
-      await this.db.mergeNode(
+      await this.graph.mergeNode(
         "Function",
         { name: fn.name, path: filePath, line_number: fn.lineNumber },
         {
@@ -213,7 +176,7 @@ export class GraphBuilder {
           repo_path: repoPath,
         },
       );
-      await this.db.mergeRelationship(
+      await this.graph.mergeRelationship(
         "File", { path: filePath },
         "Function", { name: fn.name, path: filePath, line_number: fn.lineNumber },
         "CONTAINS",
@@ -221,12 +184,12 @@ export class GraphBuilder {
 
       // Insert parameter nodes
       for (const arg of fn.args) {
-        await this.db.mergeNode(
+        await this.graph.mergeNode(
           "Parameter",
           { name: arg, function_name: fn.name, path: filePath },
           { line_number: fn.lineNumber },
         );
-        await this.db.mergeRelationship(
+        await this.graph.mergeRelationship(
           "Function", { name: fn.name, path: filePath, line_number: fn.lineNumber },
           "Parameter", { name: arg, function_name: fn.name, path: filePath },
           "HAS_PARAMETER",
@@ -237,7 +200,7 @@ export class GraphBuilder {
     // Insert classes
     for (const cls of parsed.classes) {
       const labels = cls.isInterface ? "Class:Interface" : "Class";
-      await this.db.mergeNode(
+      await this.graph.mergeNode(
         labels,
         { name: cls.name, path: filePath, line_number: cls.lineNumber },
         {
@@ -252,7 +215,7 @@ export class GraphBuilder {
           repo_path: repoPath,
         },
       );
-      await this.db.mergeRelationship(
+      await this.graph.mergeRelationship(
         "File", { path: filePath },
         "Class", { name: cls.name, path: filePath, line_number: cls.lineNumber },
         "CONTAINS",
@@ -261,7 +224,7 @@ export class GraphBuilder {
 
     // Insert variables
     for (const v of parsed.variables) {
-      await this.db.mergeNode(
+      await this.graph.mergeNode(
         "Variable",
         { name: v.name, path: filePath, line_number: v.lineNumber },
         {
@@ -273,7 +236,7 @@ export class GraphBuilder {
           repo_path: repoPath,
         },
       );
-      await this.db.mergeRelationship(
+      await this.graph.mergeRelationship(
         "File", { path: filePath },
         "Variable", { name: v.name, path: filePath, line_number: v.lineNumber },
         "CONTAINS",
@@ -282,8 +245,8 @@ export class GraphBuilder {
 
     // Insert imports → Module nodes
     for (const imp of parsed.imports) {
-      await this.db.mergeNode("Module", { name: imp.source }, {});
-      await this.db.mergeRelationship(
+      await this.graph.mergeNode("Module", { name: imp.source }, {});
+      await this.graph.mergeRelationship(
         "File", { path: filePath },
         "Module", { name: imp.source },
         "IMPORTS",
@@ -300,61 +263,58 @@ export class GraphBuilder {
     return parsed;
   }
 
-  /**
-   * Remove a file from the graph.
-   */
   async removeFile(filePath: string): Promise<void> {
-    await this.db.deleteFileNodes(filePath);
+    await this.graph.deleteFileNodes(filePath);
   }
 
-  /**
-   * Delete an entire repository from the graph.
-   */
-  async deleteRepository(repoPath: string): Promise<void> {
-    await this.db.deleteRepository(repoPath);
+  async collectFiles(dirPath: string): Promise<string[]> {
+    const extensions = this.parsers.flatMap((p) => p.supportedExtensions);
+    const patterns = extensions.map((ext) => `**/*${ext}`);
+
+    // Load .gitignore if present
+    const ig = (ignore as any).default ? (ignore as any).default() : (ignore as any)();
+    const gitignorePath = resolve(dirPath, ".gitignore");
+    if (this.fs.exists(gitignorePath)) {
+      const content = this.fs.readFile(gitignorePath);
+      ig.add(content);
+    }
+    ig.add(["node_modules", "vendor", "dist", ".git", "build", "coverage"]);
+
+    const files = await this.fs.glob(patterns, {
+      cwd: dirPath,
+      absolute: true,
+      ignore: ["**/node_modules/**", "**/vendor/**", "**/dist/**", "**/.git/**", "**/build/**"],
+    });
+
+    return files.filter((f) => {
+      const rel = relative(dirPath, f);
+      return !ig.ignores(rel);
+    });
   }
 
-  /**
-   * Get statistics for an indexed repository.
-   */
-  async getStats(repoPath?: string): Promise<GraphStats> {
-    const where = repoPath ? "WHERE n.repo_path = $repoPath" : "";
-    const params = repoPath ? { repoPath } : {};
+  // ── Private ───────────────────────────────────────────────────
 
-    const [repos, files, functions, classes, variables, rels] = await Promise.all([
-      this.db.runQuery(
-        `MATCH (r:Repository) ${repoPath ? "WHERE r.path = $repoPath" : ""} RETURN count(r) as c`,
-        params,
-      ),
-      this.db.runQuery(`MATCH (f:File) ${repoPath ? "WHERE f.repo_path = $repoPath" : ""} RETURN count(f) as c`, params),
-      this.db.runQuery(`MATCH (f:Function) ${where} RETURN count(f) as c`, params),
-      this.db.runQuery(`MATCH (c:Class) ${where} RETURN count(c) as c`, params),
-      this.db.runQuery(`MATCH (v:Variable) ${where} RETURN count(v) as c`, params),
-      this.db.runQuery(`MATCH ()-[r]->() RETURN count(r) as c`),
-    ]);
-
-    return {
-      repositories: (repos.records[0]?.get("c") as any)?.toNumber?.() ?? repos.records[0]?.get("c") ?? 0,
-      files: (files.records[0]?.get("c") as any)?.toNumber?.() ?? files.records[0]?.get("c") ?? 0,
-      functions: (functions.records[0]?.get("c") as any)?.toNumber?.() ?? functions.records[0]?.get("c") ?? 0,
-      classes: (classes.records[0]?.get("c") as any)?.toNumber?.() ?? classes.records[0]?.get("c") ?? 0,
-      variables: (variables.records[0]?.get("c") as any)?.toNumber?.() ?? variables.records[0]?.get("c") ?? 0,
-      relationships: (rels.records[0]?.get("c") as any)?.toNumber?.() ?? rels.records[0]?.get("c") ?? 0,
-    };
+  private getParserForFile(filePath: string): LanguageParser | undefined {
+    const ext = extname(filePath).toLowerCase();
+    return this.parsers.find((p) => p.supportedExtensions.includes(ext));
   }
-
-  // ── Phase 1: Pre-scan ───────────────────────────────────────
 
   private preScanAll(files: string[]): ImportsMap {
     const combinedMap: ImportsMap = new Map();
 
     // Group files by parser
-    const parserFiles = new Map<LanguageParser, string[]>();
+    const parserFiles = new Map<LanguageParser, { filePath: string; sourceCode: string }[]>();
     for (const f of files) {
-      const parser = getParserForFile(this.parsers, f);
+      const parser = this.getParserForFile(f);
       if (!parser) continue;
+      let sourceCode: string;
+      try {
+        sourceCode = this.fs.readFile(f);
+      } catch {
+        continue;
+      }
       if (!parserFiles.has(parser)) parserFiles.set(parser, []);
-      parserFiles.get(parser)!.push(f);
+      parserFiles.get(parser)!.push({ filePath: f, sourceCode });
     }
 
     for (const [parser, group] of parserFiles) {
@@ -368,18 +328,15 @@ export class GraphBuilder {
     return combinedMap;
   }
 
-  // ── Phase 3a: Inheritance links ─────────────────────────────
-
   private async createInheritanceLinks(
     parsed: ParsedFile,
     importsMap: ImportsMap,
   ): Promise<void> {
     for (const cls of parsed.classes) {
       for (const baseName of cls.bases) {
-        // Try to resolve the base class
-        const resolved = this.resolveSymbol(baseName, parsed, importsMap);
+        const resolved = resolveSymbol(baseName, parsed, importsMap);
         if (resolved) {
-          await this.db.runQuery(
+          await this.graph.runQuery(
             `MATCH (child:Class {name: $childName, path: $childPath, line_number: $childLine})
              MATCH (parent:Class {name: $parentName, path: $parentPath})
              MERGE (child)-[:INHERITS]->(parent)`,
@@ -394,12 +351,11 @@ export class GraphBuilder {
         }
       }
 
-      // Implements links
       if (cls.implements) {
         for (const ifaceName of cls.implements) {
-          const resolved = this.resolveSymbol(ifaceName, parsed, importsMap);
+          const resolved = resolveSymbol(ifaceName, parsed, importsMap);
           if (resolved) {
-            await this.db.runQuery(
+            await this.graph.runQuery(
               `MATCH (child:Class {name: $childName, path: $childPath, line_number: $childLine})
                MATCH (iface:Class {name: $ifaceName, path: $ifacePath})
                MERGE (child)-[:IMPLEMENTS]->(iface)`,
@@ -417,8 +373,6 @@ export class GraphBuilder {
     }
   }
 
-  // ── Phase 3b: Call links ────────────────────────────────────
-
   private async createCallLinks(
     parsed: ParsedFile,
     importsMap: ImportsMap,
@@ -427,10 +381,9 @@ export class GraphBuilder {
     for (const call of parsed.calls) {
       if (!call.callerName) continue;
 
-      // Resolve callee
-      const resolved = this.resolveSymbol(call.name, parsed, importsMap);
+      const resolved = resolveSymbol(call.name, parsed, importsMap);
       if (resolved) {
-        await this.db.runQuery(
+        await this.graph.runQuery(
           `MATCH (caller:Function {name: $callerName, path: $callerPath})
            MATCH (callee:Function {name: $calleeName, path: $calleePath})
            MERGE (caller)-[:CALLS {line_number: $lineNumber}]->(callee)`,
@@ -446,7 +399,7 @@ export class GraphBuilder {
         // Try local function in same file
         const localFn = parsed.functions.find((f) => f.name === call.name);
         if (localFn) {
-          await this.db.runQuery(
+          await this.graph.runQuery(
             `MATCH (caller:Function {name: $callerName, path: $path})
              MATCH (callee:Function {name: $calleeName, path: $path2, line_number: $calleeLine})
              MERGE (caller)-[:CALLS {line_number: $lineNumber}]->(callee)`,
@@ -462,61 +415,5 @@ export class GraphBuilder {
         }
       }
     }
-  }
-
-  // ── Symbol resolution ───────────────────────────────────────
-
-  private resolveSymbol(
-    name: string,
-    parsed: ParsedFile,
-    importsMap: ImportsMap,
-  ): { filePath: string; lineNumber: number } | undefined {
-    // 1. Check imports of this file
-    const imp = parsed.imports.find((i) => i.name === name || i.alias === name);
-    if (imp) {
-      const locations = importsMap.get(name) ?? importsMap.get(imp.name);
-      if (locations && locations.length > 0) {
-        return locations[0];
-      }
-    }
-
-    // 2. Check global importsMap
-    const globalLocations = importsMap.get(name);
-    if (globalLocations && globalLocations.length > 0) {
-      // Prefer a different file over same file
-      const external = globalLocations.find((l) => l.filePath !== parsed.path);
-      return external ?? globalLocations[0];
-    }
-
-    return undefined;
-  }
-
-  // ── File collection ─────────────────────────────────────────
-
-  async collectFiles(dirPath: string): Promise<string[]> {
-    const extensions = this.parsers.flatMap((p) => p.supportedExtensions);
-    const patterns = extensions.map((ext) => `**/*${ext}`);
-
-    // Load .gitignore if present
-    const ig = (ignore as any).default ? (ignore as any).default() : (ignore as any)();
-    const gitignorePath = resolve(dirPath, ".gitignore");
-    if (existsSync(gitignorePath)) {
-      const content = readFileSync(gitignorePath, "utf-8");
-      ig.add(content);
-    }
-    // Always ignore node_modules, vendor, dist, .git
-    ig.add(["node_modules", "vendor", "dist", ".git", "build", "coverage"]);
-
-    const files = await globby(patterns, {
-      cwd: dirPath,
-      absolute: true,
-      ignore: ["**/node_modules/**", "**/vendor/**", "**/dist/**", "**/.git/**", "**/build/**"],
-    });
-
-    // Apply gitignore filter
-    return files.filter((f) => {
-      const rel = relative(dirPath, f);
-      return !ig.ignores(rel);
-    });
   }
 }

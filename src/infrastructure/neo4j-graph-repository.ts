@@ -1,9 +1,5 @@
-import neo4j, {
-  type Driver,
-  type Session,
-  type ManagedTransaction,
-  type QueryResult,
-} from "neo4j-driver";
+import neo4j, { type Driver } from "neo4j-driver";
+import type { GraphRepository, QueryResultRows } from "../domain/ports.js";
 
 // ── Schema DDL ──────────────────────────────────────────────────
 
@@ -24,58 +20,43 @@ const FULLTEXT_INDEX = `
   FOR (n:Function|Class|Variable) ON EACH [n.name]
 `;
 
-// ── Database wrapper ────────────────────────────────────────────
+// ── Repository implementation ───────────────────────────────────
 
-export class Database {
+export class Neo4jGraphRepository implements GraphRepository {
   private driver: Driver;
 
   constructor(uri: string, username: string, password: string) {
     this.driver = neo4j.driver(uri, neo4j.auth.basic(username, password));
   }
 
-  /** Verify the connection is alive. */
   async verifyConnectivity(): Promise<void> {
     await this.driver.verifyConnectivity();
   }
 
-  /** Create constraints, indexes, and fulltext indexes. */
   async ensureSchema(): Promise<void> {
     for (const stmt of SCHEMA_STATEMENTS) {
-      await this.runQuery(stmt);
+      await this.runWriteQuery(stmt);
     }
     try {
-      await this.runQuery(FULLTEXT_INDEX);
+      await this.runWriteQuery(FULLTEXT_INDEX);
     } catch {
       // fulltext index may already exist or syntax may differ across versions
     }
   }
 
-  /** Execute a single Cypher query. */
   async runQuery(
     cypher: string,
     params: Record<string, unknown> = {},
-  ): Promise<QueryResult> {
+  ): Promise<QueryResultRows> {
     const session = this.driver.session();
     try {
-      return await session.run(cypher, params);
+      const result = await session.run(cypher, params);
+      return result.records.map((r) => r.toObject());
     } finally {
       await session.close();
     }
   }
 
-  /** Execute a function inside a write-transaction. */
-  async runInTransaction<T>(
-    fn: (tx: ManagedTransaction) => Promise<T>,
-  ): Promise<T> {
-    const session = this.driver.session();
-    try {
-      return await session.executeWrite(fn);
-    } finally {
-      await session.close();
-    }
-  }
-
-  /** MERGE a node by label + key properties, setting extra props. */
   async mergeNode(
     label: string,
     key: Record<string, unknown>,
@@ -93,13 +74,12 @@ export class Database {
     for (const k of keyEntries) params[`key_${k}`] = key[k];
     for (const k of setEntries) params[`prop_${k}`] = props[k];
 
-    await this.runQuery(
+    await this.runWriteQuery(
       `MERGE (n:${label} {${keyClause}}) ${setClause}`,
       params,
     );
   }
 
-  /** MERGE a relationship between two nodes. */
   async mergeRelationship(
     fromLabel: string,
     fromKey: Record<string, unknown>,
@@ -125,56 +105,50 @@ export class Database {
     for (const k of toEntries) params[`to_${k}`] = toKey[k];
     for (const k of propEntries) params[`rel_${k}`] = props[k];
 
-    await this.runQuery(
+    await this.runWriteQuery(
       `MATCH (a:${fromLabel} {${fromClause}}), (b:${toLabel} {${toClause}})
        MERGE (a)-[:${relType}${propClause}]->(b)`,
       params,
     );
   }
 
-  /** Delete all nodes and relationships originating from a file. */
   async deleteFileNodes(filePath: string): Promise<void> {
-    await this.runQuery(
+    await this.runWriteQuery(
       `MATCH (f:File {path: $path})-[:CONTAINS]->(n) DETACH DELETE n`,
       { path: filePath },
     );
-    await this.runQuery(
+    await this.runWriteQuery(
       `MATCH (f:File {path: $path}) DETACH DELETE f`,
       { path: filePath },
     );
   }
 
-  /** Delete all nodes belonging to a repository. */
   async deleteRepository(repoPath: string): Promise<void> {
-    await this.runQuery(
+    await this.runWriteQuery(
       `MATCH (r:Repository {path: $path})-[*]->(n) DETACH DELETE n, r`,
       { path: repoPath },
     );
   }
 
-  /** Close the driver. */
+  async deleteAll(): Promise<void> {
+    await this.runWriteQuery("MATCH (n) DETACH DELETE n");
+  }
+
   async close(): Promise<void> {
     await this.driver.close();
   }
-}
 
-// ── Singleton helper ────────────────────────────────────────────
+  // ── Private helper ────────────────────────────────────────────
 
-let _instance: Database | null = null;
-
-export function getDatabase(): Database {
-  if (!_instance) {
-    const uri = process.env.NEO4J_URI ?? "bolt://localhost:7687";
-    const user = process.env.NEO4J_USERNAME ?? "neo4j";
-    const pass = process.env.NEO4J_PASSWORD ?? "codegraph123";
-    _instance = new Database(uri, user, pass);
-  }
-  return _instance;
-}
-
-export async function closeDatabase(): Promise<void> {
-  if (_instance) {
-    await _instance.close();
-    _instance = null;
+  private async runWriteQuery(
+    cypher: string,
+    params: Record<string, unknown> = {},
+  ): Promise<void> {
+    const session = this.driver.session();
+    try {
+      await session.run(cypher, params);
+    } finally {
+      await session.close();
+    }
   }
 }

@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import type TreeSitter from "tree-sitter";
 import { BaseParser } from "./base-parser.js";
@@ -6,11 +5,8 @@ import type {
   ParsedFile,
   ParsedFunction,
   ParsedClass,
-  ParsedImport,
-  ParsedCall,
-  ParsedVariable,
   ImportsMap,
-} from "../core/types.js";
+} from "../types.js";
 
 const require = createRequire(import.meta.url);
 
@@ -25,15 +21,15 @@ export class PHPParser extends BaseParser {
 
   // ── Public API ──────────────────────────────────────────────
 
-  parse(filePath: string, isDependency = false): ParsedFile {
-    const { source, tree } = this.readAndParse(filePath);
+  parse(sourceCode: string, filePath: string, isDependency = false): ParsedFile {
+    const tree = this.parseSource(sourceCode);
     const repoPath = "";
     const result = this.emptyParsedFile(filePath, repoPath);
     result.lang = "php";
     const root = tree.rootNode;
 
-    this.extractFunctions(root, result, source, isDependency);
-    this.extractClasses(root, result, source, isDependency);
+    this.extractFunctions(root, result, sourceCode, isDependency);
+    this.extractClasses(root, result, sourceCode, isDependency);
     this.extractImports(root, result);
     this.extractCalls(root, result);
     if (!isDependency) {
@@ -43,20 +39,13 @@ export class PHPParser extends BaseParser {
     return result;
   }
 
-  preScan(files: string[]): ImportsMap {
+  preScan(files: { filePath: string; sourceCode: string }[]): ImportsMap {
     const map: ImportsMap = new Map();
 
-    for (const filePath of files) {
-      let source: string;
-      try {
-        source = readFileSync(filePath, "utf-8");
-      } catch {
-        continue;
-      }
-      const tree = this.parseSource(source);
+    for (const { filePath, sourceCode } of files) {
+      const tree = this.parseSource(sourceCode);
       const root = tree.rootNode;
 
-      // Collect all function/class definitions
       for (const node of root.descendantsOfType("function_definition")) {
         const name = this.getFieldText(node, "name");
         if (name) {
@@ -105,13 +94,10 @@ export class PHPParser extends BaseParser {
     source: string,
     isDependency: boolean,
   ): void {
-    // Top-level functions
     for (const node of root.descendantsOfType("function_definition")) {
       const fn = this.parsePHPFunction(node, source, isDependency);
       if (fn) result.functions.push(fn);
     }
-
-    // Class methods
     for (const node of root.descendantsOfType("method_declaration")) {
       const fn = this.parsePHPMethod(node, source, isDependency);
       if (fn) result.functions.push(fn);
@@ -155,17 +141,12 @@ export class PHPParser extends BaseParser {
     const args = params ? this.extractPHPParams(params) : [];
     const body = node.childForFieldName("body");
 
-    // Detect visibility/static modifiers
     let kind: ParsedFunction["kind"];
     const modifiers = node.descendantsOfType("static_modifier");
     if (modifiers.length > 0) kind = "static";
     if (name === "__construct") kind = "constructor";
 
-    // Check for abstract
-    const isAbstractMethod = node.descendantsOfType("abstract_modifier").length > 0;
-
     const decorators: string[] = [];
-    // PHP attributes (#[...])
     const attributes = node.descendantsOfType("attribute_list");
     for (const attr of attributes) {
       decorators.push(attr.text);
@@ -218,7 +199,6 @@ export class PHPParser extends BaseParser {
     const bases: string[] = [];
     const impls: string[] = [];
 
-    // extends
     const baseClause = node.childForFieldName("base_clause") ??
       node.descendantsOfType("base_clause")[0];
     if (baseClause) {
@@ -230,7 +210,6 @@ export class PHPParser extends BaseParser {
       }
     }
 
-    // implements
     const implClause = node.descendantsOfType("class_interface_clause");
     for (const ic of implClause) {
       for (let i = 0; i < ic.namedChildCount; i++) {
@@ -311,10 +290,8 @@ export class PHPParser extends BaseParser {
     root: TreeSitter.SyntaxNode,
     result: ParsedFile,
   ): void {
-    // namespace use declarations: use App\Foo\Bar;
     for (const node of root.descendantsOfType("namespace_use_declaration")) {
       for (const clause of node.descendantsOfType("namespace_use_clause")) {
-        // The qualified_name child holds the full namespace path
         const qName = clause.descendantsOfType("qualified_name")[0];
         const nameNode = qName ?? clause.namedChild(0);
         if (!nameNode) continue;
@@ -322,7 +299,6 @@ export class PHPParser extends BaseParser {
         const parts = fullName.split("\\");
         const shortName = parts[parts.length - 1]!;
 
-        // Check for alias (as)
         const aliasNode = clause.childForFieldName("alias");
         const alias = aliasNode?.text;
 
@@ -335,7 +311,6 @@ export class PHPParser extends BaseParser {
       }
     }
 
-    // include/require statements
     for (const node of root.descendantsOfType("include_expression")) {
       const arg = node.namedChild(0);
       if (arg) {
@@ -354,7 +329,6 @@ export class PHPParser extends BaseParser {
     root: TreeSitter.SyntaxNode,
     result: ParsedFile,
   ): void {
-    // Function calls
     for (const node of root.descendantsOfType("function_call_expression")) {
       const fnNode = node.childForFieldName("function");
       if (!fnNode) continue;
@@ -372,7 +346,6 @@ export class PHPParser extends BaseParser {
       });
     }
 
-    // Method calls: $obj->method()
     for (const node of root.descendantsOfType("member_call_expression")) {
       const obj = node.childForFieldName("object");
       const method = node.childForFieldName("name");
@@ -392,7 +365,6 @@ export class PHPParser extends BaseParser {
       });
     }
 
-    // Static calls: Class::method()
     for (const node of root.descendantsOfType("scoped_call_expression")) {
       const scope = node.childForFieldName("scope");
       const method = node.childForFieldName("name");
@@ -412,7 +384,6 @@ export class PHPParser extends BaseParser {
       });
     }
 
-    // new ClassName()
     for (const node of root.descendantsOfType("object_creation_expression")) {
       const classNode = node.namedChild(0);
       if (!classNode) continue;
@@ -438,7 +409,6 @@ export class PHPParser extends BaseParser {
     root: TreeSitter.SyntaxNode,
     result: ParsedFile,
   ): void {
-    // Property declarations in classes
     for (const node of root.descendantsOfType("property_declaration")) {
       for (const elem of node.descendantsOfType("property_element")) {
         const varNode = elem.descendantsOfType("variable_name")[0];
@@ -455,7 +425,6 @@ export class PHPParser extends BaseParser {
       }
     }
 
-    // Const declarations
     for (const node of root.descendantsOfType("const_declaration")) {
       for (const elem of node.descendantsOfType("const_element")) {
         const name = this.getFieldText(elem, "name");
@@ -494,11 +463,7 @@ export class PHPParser extends BaseParser {
     const args: string[] = [];
     for (let i = 0; i < argsNode.namedChildCount; i++) {
       const arg = argsNode.namedChild(i)!;
-      if (arg.type === "argument") {
-        args.push(arg.text.substring(0, 100));
-      } else {
-        args.push(arg.text.substring(0, 100));
-      }
+      args.push(arg.text.substring(0, 100));
     }
     return args;
   }

@@ -4,9 +4,12 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { TOOL_DEFINITIONS, handleToolCall } from "./tools.js";
+import type { AppServices } from "../../composition-root.js";
+import { TOOL_DEFINITIONS, createToolHandler } from "./tools.js";
 
-export function createMCPServer(): Server {
+export function createMCPServer(services: AppServices): Server {
+  const handleToolCall = createToolHandler(services);
+
   const server = new Server(
     {
       name: "code-graph-ts",
@@ -19,7 +22,6 @@ export function createMCPServer(): Server {
     },
   );
 
-  // List available tools
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     return {
       tools: TOOL_DEFINITIONS.map((t) => ({
@@ -30,7 +32,6 @@ export function createMCPServer(): Server {
     };
   });
 
-  // Handle tool calls
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
     try {
@@ -60,8 +61,8 @@ export function createMCPServer(): Server {
   return server;
 }
 
-export async function startMCPServer(): Promise<void> {
-  const server = createMCPServer();
+export async function startMCPServer(services: AppServices): Promise<void> {
+  const server = createMCPServer(services);
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error("Code Graph MCP server running on stdio");

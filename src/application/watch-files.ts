@@ -1,7 +1,7 @@
 import { watch, type FSWatcher } from "chokidar";
 import { resolve, extname } from "node:path";
-import type { GraphBuilder } from "./graph-builder.js";
-import type { ImportsMap, ParsedFile } from "./types.js";
+import type { WatchFiles, IndexCode, Logger } from "../domain/ports.js";
+import type { ImportsMap } from "../domain/types.js";
 
 const SUPPORTED_EXTENSIONS = new Set([
   ".js", ".jsx", ".mjs", ".cjs",
@@ -11,24 +11,20 @@ const SUPPORTED_EXTENSIONS = new Set([
 
 const DEBOUNCE_MS = 2000;
 
-export class FileWatcher {
-  private builder: GraphBuilder;
+export class WatchFilesService implements WatchFiles {
   private watchers = new Map<string, FSWatcher>();
   private importsMapCache = new Map<string, ImportsMap>();
   private debounceTimers = new Map<string, NodeJS.Timeout>();
 
-  constructor(builder: GraphBuilder) {
-    this.builder = builder;
-  }
+  constructor(
+    private readonly indexCode: IndexCode,
+    private readonly logger: Logger,
+  ) {}
 
-  /** Start watching a directory. */
   async watch(dirPath: string): Promise<void> {
     const absPath = resolve(dirPath);
     if (this.watchers.has(absPath)) return;
 
-    // Build initial importsMap
-    const files = await this.builder.collectFiles(absPath);
-    // We'll re-index first so the cache is fresh
     const importsMap: ImportsMap = new Map();
     this.importsMapCache.set(absPath, importsMap);
 
@@ -49,10 +45,9 @@ export class FileWatcher {
     watcher.on("unlink", (filePath) => this.handleUnlink(absPath, filePath));
 
     this.watchers.set(absPath, watcher);
-    console.error(`Watching: ${absPath}`);
+    this.logger.info(`Watching: ${absPath}`);
   }
 
-  /** Stop watching a directory. */
   async unwatch(dirPath: string): Promise<void> {
     const absPath = resolve(dirPath);
     const watcher = this.watchers.get(absPath);
@@ -60,18 +55,16 @@ export class FileWatcher {
       await watcher.close();
       this.watchers.delete(absPath);
       this.importsMapCache.delete(absPath);
-      console.error(`Unwatched: ${absPath}`);
+      this.logger.info(`Unwatched: ${absPath}`);
     }
   }
 
-  /** List all watched paths. */
   getWatchedPaths(): string[] {
     return Array.from(this.watchers.keys());
   }
 
-  /** Close all watchers. */
   async closeAll(): Promise<void> {
-    for (const [path, watcher] of this.watchers) {
+    for (const [, watcher] of this.watchers) {
       await watcher.close();
     }
     this.watchers.clear();
@@ -84,7 +77,6 @@ export class FileWatcher {
     const ext = extname(filePath).toLowerCase();
     if (!SUPPORTED_EXTENSIONS.has(ext)) return;
 
-    // Debounce
     const key = filePath;
     const existing = this.debounceTimers.get(key);
     if (existing) clearTimeout(existing);
@@ -94,12 +86,12 @@ export class FileWatcher {
       setTimeout(async () => {
         this.debounceTimers.delete(key);
         try {
-          console.error(`Re-indexing: ${filePath}`);
+          this.logger.info(`Re-indexing: ${filePath}`);
           const importsMap = this.importsMapCache.get(repoPath) ?? new Map();
-          await this.builder.indexFile(filePath, repoPath, importsMap);
-          console.error(`Re-indexed: ${filePath}`);
+          await this.indexCode.indexFile(filePath, repoPath, importsMap);
+          this.logger.info(`Re-indexed: ${filePath}`);
         } catch (err) {
-          console.error(`Error re-indexing ${filePath}:`, err);
+          this.logger.error(`Error re-indexing ${filePath}:`, err);
         }
       }, DEBOUNCE_MS),
     );
@@ -118,11 +110,11 @@ export class FileWatcher {
       setTimeout(async () => {
         this.debounceTimers.delete(key);
         try {
-          console.error(`Removing from graph: ${filePath}`);
-          await this.builder.removeFile(filePath);
-          console.error(`Removed: ${filePath}`);
+          this.logger.info(`Removing from graph: ${filePath}`);
+          await this.indexCode.removeFile(filePath);
+          this.logger.info(`Removed: ${filePath}`);
         } catch (err) {
-          console.error(`Error removing ${filePath}:`, err);
+          this.logger.error(`Error removing ${filePath}:`, err);
         }
       }, DEBOUNCE_MS),
     );

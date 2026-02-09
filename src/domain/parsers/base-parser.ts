@@ -1,12 +1,11 @@
 import { createRequire } from "node:module";
-import { readFileSync } from "node:fs";
 import type TreeSitter from "tree-sitter";
 import type {
   LanguageParser,
   ParsedFile,
   ImportsMap,
   SupportedLanguage,
-} from "../core/types.js";
+} from "../types.js";
 
 const require = createRequire(import.meta.url);
 const Parser = require("tree-sitter") as typeof TreeSitter;
@@ -21,19 +20,12 @@ export abstract class BaseParser implements LanguageParser {
     this.parser.setLanguage(language as TreeSitter.Language);
   }
 
-  abstract parse(filePath: string, isDependency?: boolean): ParsedFile;
-  abstract preScan(files: string[]): ImportsMap;
+  abstract parse(sourceCode: string, filePath: string, isDependency?: boolean): ParsedFile;
+  abstract preScan(files: { filePath: string; sourceCode: string }[]): ImportsMap;
 
   /** Parse source text into a tree-sitter Tree. */
   protected parseSource(source: string): TreeSitter.Tree {
     return this.parser.parse(source);
-  }
-
-  /** Read a file and return its content + parsed tree. */
-  protected readAndParse(filePath: string): { source: string; tree: TreeSitter.Tree } {
-    const source = readFileSync(filePath, "utf-8");
-    const tree = this.parseSource(source);
-    return { source, tree };
   }
 
   /** Get text of a tree-sitter node. */
@@ -157,7 +149,7 @@ export abstract class BaseParser implements LanguageParser {
   }
 
   /** Get language for a file extension. */
-  protected langFromPath(filePath: string): SupportedLanguage {
+  protected langFromPath(_filePath: string): SupportedLanguage {
     return this.languageName as SupportedLanguage;
   }
 

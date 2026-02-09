@@ -3,10 +3,13 @@
 import "dotenv/config";
 import { Command } from "commander";
 import { resolve } from "node:path";
-import { getDatabase, closeDatabase } from "../core/database.js";
-import { GraphBuilder, getJob } from "../core/graph-builder.js";
-import { FileWatcher } from "../core/watcher.js";
+import { loadConfig } from "../../config.js";
+import { createAppServices } from "../../composition-root.js";
 import { startMCPServer } from "../mcp/server.js";
+
+const config = loadConfig();
+const services = createAppServices(config);
+const { graph, indexCode, analyzeCode, manageRepos, watchFiles: watchService, jobs } = services;
 
 const program = new Command();
 
@@ -26,13 +29,10 @@ program
     const absPath = resolve(path);
     console.log(`Indexing: ${absPath}`);
 
-    const db = getDatabase();
-    const builder = new GraphBuilder(db);
-
     try {
-      await db.verifyConnectivity();
-      const jobId = await builder.indexDirectory(absPath, opts.dependency);
-      const job = getJob(jobId);
+      await graph.verifyConnectivity();
+      const jobId = await indexCode.indexDirectory(absPath, opts.dependency);
+      const job = jobs.get(jobId);
       console.log(`Done! Job: ${jobId}`);
       console.log(`  Status: ${job?.status}`);
       console.log(`  Files: ${job?.filesProcessed}/${job?.filesTotal}`);
@@ -41,7 +41,7 @@ program
       console.error("Error:", err);
       process.exitCode = 1;
     } finally {
-      await closeDatabase();
+      await graph.close();
     }
   });
 
@@ -51,25 +51,22 @@ program
   .command("list")
   .description("List indexed repositories")
   .action(async () => {
-    const db = getDatabase();
     try {
-      await db.verifyConnectivity();
-      const result = await db.runQuery(
-        "MATCH (r:Repository) RETURN r.path as path, r.name as name",
-      );
-      if (result.records.length === 0) {
+      await graph.verifyConnectivity();
+      const repos = await manageRepos.listRepositories();
+      if (repos.length === 0) {
         console.log("No repositories indexed.");
       } else {
         console.log("Indexed repositories:");
-        for (const r of result.records) {
-          console.log(`  ${r.get("name")} → ${r.get("path")}`);
+        for (const r of repos) {
+          console.log(`  ${r.name} → ${r.path}`);
         }
       }
     } catch (err) {
       console.error("Error:", err);
       process.exitCode = 1;
     } finally {
-      await closeDatabase();
+      await graph.close();
     }
   });
 
@@ -81,17 +78,14 @@ program
   .argument("[path]", "Repository path to delete")
   .option("--all", "Delete all repositories")
   .action(async (path: string | undefined, opts: { all?: boolean }) => {
-    const db = getDatabase();
-    const builder = new GraphBuilder(db);
-
     try {
-      await db.verifyConnectivity();
+      await graph.verifyConnectivity();
       if (opts.all) {
-        await db.runQuery("MATCH (n) DETACH DELETE n");
+        await manageRepos.deleteAll();
         console.log("All data deleted.");
       } else if (path) {
         const absPath = resolve(path);
-        await builder.deleteRepository(absPath);
+        await manageRepos.deleteRepository(absPath);
         console.log(`Deleted: ${absPath}`);
       } else {
         console.error("Specify a path or use --all");
@@ -101,7 +95,7 @@ program
       console.error("Error:", err);
       process.exitCode = 1;
     } finally {
-      await closeDatabase();
+      await graph.close();
     }
   });
 
@@ -112,13 +106,10 @@ program
   .description("Show graph statistics")
   .argument("[path]", "Filter by repository path")
   .action(async (path?: string) => {
-    const db = getDatabase();
-    const builder = new GraphBuilder(db);
-
     try {
-      await db.verifyConnectivity();
+      await graph.verifyConnectivity();
       const repoPath = path ? resolve(path) : undefined;
-      const stats = await builder.getStats(repoPath);
+      const stats = await manageRepos.getStats(repoPath);
       console.log("Graph Statistics:");
       console.log(`  Repositories:  ${stats.repositories}`);
       console.log(`  Files:         ${stats.files}`);
@@ -130,7 +121,7 @@ program
       console.error("Error:", err);
       process.exitCode = 1;
     } finally {
-      await closeDatabase();
+      await graph.close();
     }
   });
 
@@ -142,26 +133,22 @@ program
   .argument("[path]", "Directory to watch", ".")
   .action(async (path: string) => {
     const absPath = resolve(path);
-    const db = getDatabase();
-    const builder = new GraphBuilder(db);
-    const watcher = new FileWatcher(builder);
 
     try {
-      await db.verifyConnectivity();
+      await graph.verifyConnectivity();
       console.log(`Watching: ${absPath}`);
       console.log("Press Ctrl+C to stop.");
-      await watcher.watch(absPath);
+      await watchService.watch(absPath);
 
-      // Keep process alive
       process.on("SIGINT", async () => {
         console.log("\nStopping watcher...");
-        await watcher.closeAll();
-        await closeDatabase();
+        await watchService.closeAll();
+        await graph.close();
         process.exit(0);
       });
     } catch (err) {
       console.error("Error:", err);
-      await closeDatabase();
+      await graph.close();
       process.exitCode = 1;
     }
   });
@@ -177,28 +164,22 @@ analyze
   .description("Find who calls a function")
   .argument("<func>", "Function name")
   .action(async (func: string) => {
-    const db = getDatabase();
     try {
-      await db.verifyConnectivity();
-      const result = await db.runQuery(
-        `MATCH (caller:Function)-[r:CALLS]->(callee:Function {name: $name})
-         RETURN caller.name as caller, caller.path as path, r.line_number as line`,
-        { name: func },
-      );
-      if (result.records.length === 0) {
+      await graph.verifyConnectivity();
+      const results = await analyzeCode.findCallers(func, 50);
+      if (results.length === 0) {
         console.log(`No callers found for "${func}".`);
       } else {
         console.log(`Callers of "${func}":`);
-        for (const r of result.records) {
-          const line = toNum(r.get("line"));
-          console.log(`  ${r.get("caller")} (${r.get("path")}:${line})`);
+        for (const r of results) {
+          console.log(`  ${r.callerName} (${r.callerPath}:${r.callLine ?? "?"})`);
         }
       }
     } catch (err) {
       console.error("Error:", err);
       process.exitCode = 1;
     } finally {
-      await closeDatabase();
+      await graph.close();
     }
   });
 
@@ -207,28 +188,22 @@ analyze
   .description("Find what a function calls")
   .argument("<func>", "Function name")
   .action(async (func: string) => {
-    const db = getDatabase();
     try {
-      await db.verifyConnectivity();
-      const result = await db.runQuery(
-        `MATCH (caller:Function {name: $name})-[r:CALLS]->(callee:Function)
-         RETURN callee.name as callee, callee.path as path, r.line_number as line`,
-        { name: func },
-      );
-      if (result.records.length === 0) {
+      await graph.verifyConnectivity();
+      const results = await analyzeCode.findCallees(func, 50);
+      if (results.length === 0) {
         console.log(`"${func}" doesn't call any tracked functions.`);
       } else {
         console.log(`"${func}" calls:`);
-        for (const r of result.records) {
-          const line = toNum(r.get("line"));
-          console.log(`  ${r.get("callee")} (${r.get("path")}:${line})`);
+        for (const r of results) {
+          console.log(`  ${r.calleeName} (${r.calleePath}:${r.callLine ?? "?"})`);
         }
       }
     } catch (err) {
       console.error("Error:", err);
       process.exitCode = 1;
     } finally {
-      await closeDatabase();
+      await graph.close();
     }
   });
 
@@ -237,20 +212,14 @@ analyze
   .description("Show class hierarchy")
   .argument("<class>", "Class name")
   .action(async (className: string) => {
-    const db = getDatabase();
     try {
-      await db.verifyConnectivity();
-      const result = await db.runQuery(
-        `MATCH path = (c:Class {name: $name})-[:INHERITS*0..10]->(parent:Class)
-         RETURN [n in nodes(path) | n.name] as chain`,
-        { name: className },
-      );
-      if (result.records.length === 0) {
+      await graph.verifyConnectivity();
+      const results = await analyzeCode.classHierarchy(className, 10);
+      if (results.length === 0) {
         console.log(`No hierarchy found for "${className}".`);
       } else {
         console.log(`Hierarchy for "${className}":`);
-        for (const r of result.records) {
-          const chain = r.get("chain") as string[];
+        for (const chain of results) {
           console.log(`  ${chain.join(" → ")}`);
         }
       }
@@ -258,7 +227,7 @@ analyze
       console.error("Error:", err);
       process.exitCode = 1;
     } finally {
-      await closeDatabase();
+      await graph.close();
     }
   });
 
@@ -267,30 +236,22 @@ analyze
   .description("Find functions with no callers")
   .option("-l, --limit <n>", "Max results", "20")
   .action(async (opts: { limit: string }) => {
-    const db = getDatabase();
     try {
-      await db.verifyConnectivity();
-      const result = await db.runQuery(
-        `MATCH (f:Function)
-         WHERE NOT ()-[:CALLS]->(f)
-         RETURN f.name as name, f.path as path, f.line_number as line
-         LIMIT $limit`,
-        { limit: parseInt(opts.limit, 10) },
-      );
-      if (result.records.length === 0) {
+      await graph.verifyConnectivity();
+      const results = await analyzeCode.deadCode(parseInt(opts.limit, 10));
+      if (results.length === 0) {
         console.log("No dead code found.");
       } else {
         console.log("Potentially dead functions:");
-        for (const r of result.records) {
-          const line = toNum(r.get("line"));
-          console.log(`  ${r.get("name")} (${r.get("path")}:${line})`);
+        for (const r of results) {
+          console.log(`  ${r.name} (${r.path}:${r.lineNumber ?? "?"})`);
         }
       }
     } catch (err) {
       console.error("Error:", err);
       process.exitCode = 1;
     } finally {
-      await closeDatabase();
+      await graph.close();
     }
   });
 
@@ -299,30 +260,22 @@ analyze
   .description("Find most complex functions")
   .option("-l, --limit <n>", "Max results", "10")
   .action(async (opts: { limit: string }) => {
-    const db = getDatabase();
     try {
-      await db.verifyConnectivity();
-      const result = await db.runQuery(
-        `MATCH (f:Function)
-         RETURN f.name as name, f.path as path, f.cyclomatic_complexity as complexity
-         ORDER BY f.cyclomatic_complexity DESC
-         LIMIT $limit`,
-        { limit: parseInt(opts.limit, 10) },
-      );
-      if (result.records.length === 0) {
+      await graph.verifyConnectivity();
+      const results = await analyzeCode.mostComplexFunctions(parseInt(opts.limit, 10));
+      if (results.length === 0) {
         console.log("No functions found.");
       } else {
         console.log("Most complex functions:");
-        for (const r of result.records) {
-          const complexity = toNum(r.get("complexity"));
-          console.log(`  [${complexity}] ${r.get("name")} (${r.get("path")})`);
+        for (const r of results) {
+          console.log(`  [${r.complexity ?? "?"}] ${r.name} (${r.path})`);
         }
       }
     } catch (err) {
       console.error("Error:", err);
       process.exitCode = 1;
     } finally {
-      await closeDatabase();
+      await graph.close();
     }
   });
 
@@ -335,7 +288,7 @@ mcp
   .description("Start the MCP server (stdio transport)")
   .action(async () => {
     try {
-      await startMCPServer();
+      await startMCPServer(services);
     } catch (err) {
       console.error("MCP server error:", err);
       process.exitCode = 1;
@@ -343,12 +296,5 @@ mcp
   });
 
 // ── Run ─────────────────────────────────────────────────────────
-
-function toNum(val: unknown): number | string {
-  if (val == null) return "?";
-  if (typeof val === "number") return val;
-  if (typeof (val as any).toNumber === "function") return (val as any).toNumber();
-  return String(val);
-}
 
 program.parse();

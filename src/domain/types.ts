@@ -72,13 +72,13 @@ export interface ParsedFile {
 
 export type ImportsMap = Map<string, { filePath: string; lineNumber: number }[]>;
 
-// ── Parser interface ────────────────────────────────────────────
+// ── Parser interface (receives source string, not file path) ────
 
 export interface LanguageParser {
   readonly supportedExtensions: string[];
   readonly languageName: string;
-  parse(filePath: string, isDependency?: boolean): ParsedFile;
-  preScan(files: string[]): ImportsMap;
+  parse(sourceCode: string, filePath: string, isDependency?: boolean): ParsedFile;
+  preScan(files: { filePath: string; sourceCode: string }[]): ImportsMap;
 }
 
 // ── Indexing job ────────────────────────────────────────────────
@@ -103,4 +103,47 @@ export interface GraphStats {
   classes: number;
   variables: number;
   relationships: number;
+}
+
+// ── Result types for analysis ───────────────────────────────────
+
+export interface SearchResult {
+  labels: string[];
+  name: string;
+  path: string;
+  lineNumber?: number;
+  score?: number;
+}
+
+export interface CallerResult {
+  callerName: string;
+  callerPath: string;
+  callerLine?: number;
+  callLine?: number;
+}
+
+export interface CalleeResult {
+  calleeName: string;
+  calleePath: string;
+  calleeLine?: number;
+  callLine?: number;
+}
+
+export interface DeadCodeResult {
+  name: string;
+  path: string;
+  lineNumber?: number;
+}
+
+export interface ImporterResult {
+  filePath: string;
+  module: string;
+  importedName: string;
+}
+
+export interface ComplexityResult {
+  name: string;
+  path: string;
+  lineNumber?: number;
+  complexity?: number;
 }

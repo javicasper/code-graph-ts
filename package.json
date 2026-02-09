@@ -5,31 +5,40 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "codegraph": "dist/cli/index.js"
+    "codegraph": "dist/adapters/cli/index.js"
   },
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "start": "node dist/cli/index.js",
-    "mcp": "node dist/cli/index.js mcp start"
+    "start": "node dist/adapters/cli/index.js",
+    "mcp": "node dist/adapters/cli/index.js mcp start",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
+    "chokidar": "^4.0.3",
+    "commander": "^13.1.0",
+    "dotenv": "^16.4.7",
+    "globby": "^14.1.0",
+    "ignore": "^7.0.3",
     "neo4j-driver": "^5.28.1",
     "tree-sitter": "^0.22.4",
     "tree-sitter-javascript": "^0.23.1",
-    "tree-sitter-typescript": "^0.23.2",
     "tree-sitter-php": "^0.23.11",
-    "commander": "^13.1.0",
-    "chokidar": "^4.0.3",
-    "globby": "^14.1.0",
-    "ignore": "^7.0.3",
-    "dotenv": "^16.4.7"
+    "tree-sitter-typescript": "^0.23.2"
   },
   "devDependencies": {
+    "@types/node": "^22.12.0",
     "typescript": "^5.7.3",
-    "@types/node": "^22.12.0"
+    "vitest": "^4.0.18"
   },
-  "keywords": ["mcp", "neo4j", "code-graph", "ast", "tree-sitter"],
+  "keywords": [
+    "mcp",
+    "neo4j",
+    "code-graph",
+    "ast",
+    "tree-sitter"
+  ],
   "license": "MIT"
 }
