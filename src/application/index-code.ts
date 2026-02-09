@@ -52,9 +52,9 @@ export class IndexCodeService implements IndexCode {
       }
 
       // Phase 1: Pre-scan all files to build ImportsMap
-      const importsMap = this.preScanAll(files);
+      const importsMap = await this.preScanAll(files);
 
-      // Phase 2: Parse & insert nodes
+      // Phase 2: Parse & insert nodes (each file in its own transaction)
       const allParsedFiles: ParsedFile[] = [];
       for (const filePath of files) {
         try {
@@ -67,11 +67,13 @@ export class IndexCodeService implements IndexCode {
         this.jobs.update(jobId, { filesProcessed: (current?.filesProcessed ?? 0) + 1 });
       }
 
-      // Phase 3: Link relationships (calls, inheritance)
+      // Phase 3: Link relationships (batched per file)
       for (const parsed of allParsedFiles) {
         try {
-          await this.createInheritanceLinks(parsed, importsMap);
-          await this.createCallLinks(parsed, importsMap, allParsedFiles);
+          await this.graph.executeBatch(async () => {
+            await this.createInheritanceLinks(parsed, importsMap);
+            await this.createCallLinks(parsed, importsMap, allParsedFiles);
+          });
         } catch (err) {
           this.logger.error(`Error linking ${parsed.path}:`, err);
         }
@@ -98,167 +100,170 @@ export class IndexCodeService implements IndexCode {
     const parser = this.getParserForFile(filePath);
     if (!parser) return null;
 
-    const sourceCode = this.fs.readFile(filePath);
+    const sourceCode = await this.fs.readFile(filePath);
     const parsed = parser.parse(sourceCode, filePath, isDependency);
     parsed.repoPath = repoPath;
 
-    // Remove existing file nodes (for re-indexing)
-    await this.graph.deleteFileNodes(filePath);
+    // Batch all graph writes in a single transaction
+    await this.graph.executeBatch(async () => {
+      // Remove existing file nodes (for re-indexing)
+      await this.graph.deleteFileNodes(filePath);
 
-    // Insert repository node
-    await this.graph.mergeNode("Repository", { path: repoPath }, {
-      name: basename(repoPath),
-    });
-
-    // Insert directory hierarchy
-    const relPath = relative(repoPath, filePath);
-    const dirParts = dirname(relPath).split("/").filter(Boolean);
-    let currentDir = repoPath;
-    for (const part of dirParts) {
-      const parentDir = currentDir;
-      currentDir = resolve(currentDir, part);
-      await this.graph.mergeNode("Directory", { path: currentDir }, {
-        name: part,
+      // Insert repository node
+      await this.graph.mergeNode("Repository", { path: repoPath }, {
+        name: basename(repoPath),
       });
-      if (parentDir === repoPath) {
+
+      // Insert directory hierarchy
+      const relPath = relative(repoPath, filePath);
+      const dirParts = dirname(relPath).split("/").filter(Boolean);
+      let currentDir = repoPath;
+      for (const part of dirParts) {
+        const parentDir = currentDir;
+        currentDir = resolve(currentDir, part);
+        await this.graph.mergeNode("Directory", { path: currentDir }, {
+          name: part,
+        });
+        if (parentDir === repoPath) {
+          await this.graph.mergeRelationship(
+            "Repository", { path: repoPath },
+            "Directory", { path: currentDir },
+            "CONTAINS_DIR",
+          );
+        } else {
+          await this.graph.mergeRelationship(
+            "Directory", { path: parentDir },
+            "Directory", { path: currentDir },
+            "CONTAINS_DIR",
+          );
+        }
+      }
+
+      // Insert file node
+      await this.graph.mergeNode("File", { path: filePath }, {
+        name: basename(filePath),
+        lang: parsed.lang,
+        repo_path: repoPath,
+      });
+
+      // File → Directory or Repository
+      if (dirParts.length > 0) {
         await this.graph.mergeRelationship(
-          "Repository", { path: repoPath },
           "Directory", { path: currentDir },
-          "CONTAINS_DIR",
+          "File", { path: filePath },
+          "CONTAINS_FILE",
         );
       } else {
         await this.graph.mergeRelationship(
-          "Directory", { path: parentDir },
-          "Directory", { path: currentDir },
-          "CONTAINS_DIR",
+          "Repository", { path: repoPath },
+          "File", { path: filePath },
+          "CONTAINS_FILE",
         );
       }
-    }
 
-    // Insert file node
-    await this.graph.mergeNode("File", { path: filePath }, {
-      name: basename(filePath),
-      lang: parsed.lang,
-      repo_path: repoPath,
-    });
-
-    // File → Directory or Repository
-    if (dirParts.length > 0) {
-      await this.graph.mergeRelationship(
-        "Directory", { path: currentDir },
-        "File", { path: filePath },
-        "CONTAINS_FILE",
-      );
-    } else {
-      await this.graph.mergeRelationship(
-        "Repository", { path: repoPath },
-        "File", { path: filePath },
-        "CONTAINS_FILE",
-      );
-    }
-
-    // Insert functions
-    for (const fn of parsed.functions) {
-      await this.graph.mergeNode(
-        "Function",
-        { name: fn.name, path: filePath, line_number: fn.lineNumber },
-        {
-          end_line: fn.endLine,
-          args: JSON.stringify(fn.args),
-          source: fn.source?.substring(0, 5000),
-          docstring: fn.docstring,
-          cyclomatic_complexity: fn.cyclomaticComplexity,
-          context: fn.context,
-          class_context: fn.classContext,
-          is_async: fn.isAsync,
-          kind: fn.kind,
-          lang: parsed.lang,
-          repo_path: repoPath,
-        },
-      );
-      await this.graph.mergeRelationship(
-        "File", { path: filePath },
-        "Function", { name: fn.name, path: filePath, line_number: fn.lineNumber },
-        "CONTAINS",
-      );
-
-      // Insert parameter nodes
-      for (const arg of fn.args) {
+      // Insert functions
+      for (const fn of parsed.functions) {
         await this.graph.mergeNode(
-          "Parameter",
-          { name: arg, function_name: fn.name, path: filePath },
-          { line_number: fn.lineNumber },
+          "Function",
+          { name: fn.name, path: filePath, line_number: fn.lineNumber },
+          {
+            end_line: fn.endLine,
+            args: JSON.stringify(fn.args),
+            source: fn.source?.substring(0, 5000),
+            docstring: fn.docstring,
+            cyclomatic_complexity: fn.cyclomaticComplexity,
+            context: fn.context,
+            class_context: fn.classContext,
+            is_async: fn.isAsync,
+            kind: fn.kind,
+            lang: parsed.lang,
+            repo_path: repoPath,
+          },
         );
         await this.graph.mergeRelationship(
+          "File", { path: filePath },
           "Function", { name: fn.name, path: filePath, line_number: fn.lineNumber },
-          "Parameter", { name: arg, function_name: fn.name, path: filePath },
-          "HAS_PARAMETER",
+          "CONTAINS",
+        );
+
+        // Insert parameter nodes
+        for (const arg of fn.args) {
+          await this.graph.mergeNode(
+            "Parameter",
+            { name: arg, function_name: fn.name, path: filePath },
+            { line_number: fn.lineNumber },
+          );
+          await this.graph.mergeRelationship(
+            "Function", { name: fn.name, path: filePath, line_number: fn.lineNumber },
+            "Parameter", { name: arg, function_name: fn.name, path: filePath },
+            "HAS_PARAMETER",
+          );
+        }
+      }
+
+      // Insert classes
+      for (const cls of parsed.classes) {
+        const labels = cls.isInterface ? "Class:Interface" : "Class";
+        await this.graph.mergeNode(
+          labels,
+          { name: cls.name, path: filePath, line_number: cls.lineNumber },
+          {
+            end_line: cls.endLine,
+            bases: JSON.stringify(cls.bases),
+            implements: cls.implements ? JSON.stringify(cls.implements) : undefined,
+            source: cls.source?.substring(0, 5000),
+            docstring: cls.docstring,
+            is_abstract: cls.isAbstract,
+            is_interface: cls.isInterface,
+            lang: parsed.lang,
+            repo_path: repoPath,
+          },
+        );
+        await this.graph.mergeRelationship(
+          "File", { path: filePath },
+          "Class", { name: cls.name, path: filePath, line_number: cls.lineNumber },
+          "CONTAINS",
         );
       }
-    }
 
-    // Insert classes
-    for (const cls of parsed.classes) {
-      const labels = cls.isInterface ? "Class:Interface" : "Class";
-      await this.graph.mergeNode(
-        labels,
-        { name: cls.name, path: filePath, line_number: cls.lineNumber },
-        {
-          end_line: cls.endLine,
-          bases: JSON.stringify(cls.bases),
-          implements: cls.implements ? JSON.stringify(cls.implements) : undefined,
-          source: cls.source?.substring(0, 5000),
-          docstring: cls.docstring,
-          is_abstract: cls.isAbstract,
-          is_interface: cls.isInterface,
-          lang: parsed.lang,
-          repo_path: repoPath,
-        },
-      );
-      await this.graph.mergeRelationship(
-        "File", { path: filePath },
-        "Class", { name: cls.name, path: filePath, line_number: cls.lineNumber },
-        "CONTAINS",
-      );
-    }
+      // Insert variables
+      for (const v of parsed.variables) {
+        await this.graph.mergeNode(
+          "Variable",
+          { name: v.name, path: filePath, line_number: v.lineNumber },
+          {
+            value: v.value,
+            type: v.type,
+            context: v.context,
+            class_context: v.classContext,
+            lang: parsed.lang,
+            repo_path: repoPath,
+          },
+        );
+        await this.graph.mergeRelationship(
+          "File", { path: filePath },
+          "Variable", { name: v.name, path: filePath, line_number: v.lineNumber },
+          "CONTAINS",
+        );
+      }
 
-    // Insert variables
-    for (const v of parsed.variables) {
-      await this.graph.mergeNode(
-        "Variable",
-        { name: v.name, path: filePath, line_number: v.lineNumber },
-        {
-          value: v.value,
-          type: v.type,
-          context: v.context,
-          class_context: v.classContext,
-          lang: parsed.lang,
-          repo_path: repoPath,
-        },
-      );
-      await this.graph.mergeRelationship(
-        "File", { path: filePath },
-        "Variable", { name: v.name, path: filePath, line_number: v.lineNumber },
-        "CONTAINS",
-      );
-    }
-
-    // Insert imports → Module nodes
-    for (const imp of parsed.imports) {
-      await this.graph.mergeNode("Module", { name: imp.source }, {});
-      await this.graph.mergeRelationship(
-        "File", { path: filePath },
-        "Module", { name: imp.source },
-        "IMPORTS",
-        {
-          imported_name: imp.name,
-          alias: imp.alias,
-          line_number: imp.lineNumber,
-          is_default: imp.isDefault,
-          is_namespace: imp.isNamespace,
-        },
-      );
-    }
+      // Insert imports → Module nodes
+      for (const imp of parsed.imports) {
+        await this.graph.mergeNode("Module", { name: imp.source }, {});
+        await this.graph.mergeRelationship(
+          "File", { path: filePath },
+          "Module", { name: imp.source },
+          "IMPORTS",
+          {
+            imported_name: imp.name,
+            alias: imp.alias,
+            line_number: imp.lineNumber,
+            is_default: imp.isDefault,
+            is_namespace: imp.isNamespace,
+          },
+        );
+      }
+    });
 
     return parsed;
   }
@@ -275,7 +280,7 @@ export class IndexCodeService implements IndexCode {
     const ig = (ignore as any).default ? (ignore as any).default() : (ignore as any)();
     const gitignorePath = resolve(dirPath, ".gitignore");
     if (this.fs.exists(gitignorePath)) {
-      const content = this.fs.readFile(gitignorePath);
+      const content = await this.fs.readFile(gitignorePath);
       ig.add(content);
     }
     ig.add(["node_modules", "vendor", "dist", ".git", "build", "coverage"]);
@@ -299,7 +304,7 @@ export class IndexCodeService implements IndexCode {
     return this.parsers.find((p) => p.supportedExtensions.includes(ext));
   }
 
-  private preScanAll(files: string[]): ImportsMap {
+  private async preScanAll(files: string[]): Promise<ImportsMap> {
     const combinedMap: ImportsMap = new Map();
 
     // Group files by parser
@@ -309,7 +314,7 @@ export class IndexCodeService implements IndexCode {
       if (!parser) continue;
       let sourceCode: string;
       try {
-        sourceCode = this.fs.readFile(f);
+        sourceCode = await this.fs.readFile(f);
       } catch (err) {
         this.logger.warn(`Skipping unreadable file in preScan: ${f}`, err);
         continue;

@@ -15,12 +15,13 @@ function createMockGraph(): GraphRepository {
     deleteRepository: vi.fn().mockResolvedValue(undefined),
     deleteAll: vi.fn().mockResolvedValue(undefined),
     close: vi.fn().mockResolvedValue(undefined),
+    executeBatch: vi.fn(async (fn: () => Promise<void>) => fn()),
   };
 }
 
 function createMockFs(files: Record<string, string> = {}): FileSystem {
   return {
-    readFile: vi.fn((path: string) => files[path] ?? ""),
+    readFile: vi.fn(async (path: string) => files[path] ?? ""),
     exists: vi.fn((path: string) => path in files),
     glob: vi.fn().mockResolvedValue(Object.keys(files)),
   };

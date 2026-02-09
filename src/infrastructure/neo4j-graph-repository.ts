@@ -1,4 +1,4 @@
-import neo4j, { type Driver } from "neo4j-driver";
+import neo4j, { type Driver, type Session, type ManagedTransaction } from "neo4j-driver";
 import type { GraphRepository, QueryResultRows } from "../domain/ports.js";
 
 // ── Schema DDL ──────────────────────────────────────────────────
@@ -24,6 +24,7 @@ const FULLTEXT_INDEX = `
 
 export class Neo4jGraphRepository implements GraphRepository {
   private driver: Driver;
+  private batchTx: ManagedTransaction | null = null;
 
   constructor(uri: string, username: string, password: string) {
     this.driver = neo4j.driver(uri, neo4j.auth.basic(username, password));
@@ -44,10 +45,30 @@ export class Neo4jGraphRepository implements GraphRepository {
     }
   }
 
+  async executeBatch(fn: () => Promise<void>): Promise<void> {
+    const session = this.driver.session();
+    try {
+      await session.executeWrite(async (tx) => {
+        this.batchTx = tx;
+        try {
+          await fn();
+        } finally {
+          this.batchTx = null;
+        }
+      });
+    } finally {
+      await session.close();
+    }
+  }
+
   async runQuery(
     cypher: string,
     params: Record<string, unknown> = {},
   ): Promise<QueryResultRows> {
+    if (this.batchTx) {
+      const result = await this.batchTx.run(cypher, params);
+      return result.records.map((r) => r.toObject());
+    }
     const session = this.driver.session();
     try {
       const result = await session.run(cypher, params);
@@ -144,6 +165,10 @@ export class Neo4jGraphRepository implements GraphRepository {
     cypher: string,
     params: Record<string, unknown> = {},
   ): Promise<void> {
+    if (this.batchTx) {
+      await this.batchTx.run(cypher, params);
+      return;
+    }
     const session = this.driver.session();
     try {
       await session.run(cypher, params);

@@ -13,6 +13,7 @@ function mockGraphRepository(): GraphRepository {
     deleteAll: vi.fn(),
     verifyConnectivity: vi.fn(),
     close: vi.fn(),
+    executeBatch: vi.fn(async (fn: () => Promise<void>) => fn()),
   };
 }
 

@@ -20,7 +20,7 @@ export interface GlobOptions {
 }
 
 export interface FileSystem {
-  readFile(filePath: string): string;
+  readFile(filePath: string): Promise<string>;
   exists(filePath: string): boolean;
   glob(patterns: string[], options: GlobOptions): Promise<string[]>;
 }
@@ -51,6 +51,8 @@ export interface GraphWriter {
 export interface GraphRepository extends GraphReader, GraphWriter {
   verifyConnectivity(): Promise<void>;
   close(): Promise<void>;
+  /** Run all operations within fn in a single transaction. */
+  executeBatch(fn: () => Promise<void>): Promise<void>;
 }
 
 export interface Logger {
