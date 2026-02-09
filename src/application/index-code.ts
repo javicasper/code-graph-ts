@@ -67,15 +67,25 @@ export class IndexCodeService implements IndexCode {
         this.jobs.update(jobId, { filesProcessed: (current?.filesProcessed ?? 0) + 1 });
       }
 
-      // Phase 3: Link relationships (batched per file)
+      // Phase 3: Link inheritance (batched per file)
       for (const parsed of allParsedFiles) {
         try {
           await this.graph.executeBatch(async () => {
             await this.createInheritanceLinks(parsed, importsMap);
+          });
+        } catch (err) {
+          this.logger.error(`Error linking inheritance for ${parsed.path}:`, err);
+        }
+      }
+
+      // Phase 4: Link calls (batched per file, separate so call failures don't rollback inheritance)
+      for (const parsed of allParsedFiles) {
+        try {
+          await this.graph.executeBatch(async () => {
             await this.createCallLinks(parsed, importsMap, allParsedFiles);
           });
         } catch (err) {
-          this.logger.error(`Error linking ${parsed.path}:`, err);
+          this.logger.error(`Error linking calls for ${parsed.path}:`, err);
         }
       }
 
@@ -336,44 +346,39 @@ export class IndexCodeService implements IndexCode {
 
   private async createInheritanceLinks(
     parsed: ParsedFile,
-    importsMap: ImportsMap,
+    _importsMap: ImportsMap,
   ): Promise<void> {
     for (const cls of parsed.classes) {
       for (const baseName of cls.bases) {
-        const resolved = resolveSymbol(baseName, parsed, importsMap);
-        if (resolved) {
-          await this.graph.runQuery(
-            `MATCH (child:Class {name: $childName, path: $childPath, line_number: $childLine})
-             MATCH (parent:Class {name: $parentName, path: $parentPath})
-             MERGE (child)-[:INHERITS]->(parent)`,
-            {
-              childName: cls.name,
-              childPath: parsed.path,
-              childLine: cls.lineNumber,
-              parentName: baseName,
-              parentPath: resolved.filePath,
-            },
-          );
-        }
+        // Match parent by name only — path restriction fails when resolveSymbol
+        // points to a re-export file instead of the actual class definition
+        await this.graph.runQuery(
+          `MATCH (child:Class {name: $childName, path: $childPath, line_number: $childLine})
+           MATCH (parent:Class {name: $parentName})
+           WHERE parent.path <> $childPath OR parent.line_number <> $childLine
+           MERGE (child)-[:INHERITS]->(parent)`,
+          {
+            childName: cls.name,
+            childPath: parsed.path,
+            childLine: cls.lineNumber,
+            parentName: baseName,
+          },
+        );
       }
 
       if (cls.implements) {
         for (const ifaceName of cls.implements) {
-          const resolved = resolveSymbol(ifaceName, parsed, importsMap);
-          if (resolved) {
-            await this.graph.runQuery(
-              `MATCH (child:Class {name: $childName, path: $childPath, line_number: $childLine})
-               MATCH (iface:Class {name: $ifaceName, path: $ifacePath})
-               MERGE (child)-[:IMPLEMENTS]->(iface)`,
-              {
-                childName: cls.name,
-                childPath: parsed.path,
-                childLine: cls.lineNumber,
-                ifaceName,
-                ifacePath: resolved.filePath,
-              },
-            );
-          }
+          await this.graph.runQuery(
+            `MATCH (child:Class {name: $childName, path: $childPath, line_number: $childLine})
+             MATCH (iface:Class {name: $ifaceName})
+             MERGE (child)-[:IMPLEMENTS]->(iface)`,
+            {
+              childName: cls.name,
+              childPath: parsed.path,
+              childLine: cls.lineNumber,
+              ifaceName,
+            },
+          );
         }
       }
     }

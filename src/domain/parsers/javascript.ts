@@ -224,12 +224,14 @@ export class JavaScriptParser extends BaseParser {
     const bases: string[] = [];
     const heritage = node.descendantsOfType("class_heritage");
     for (const h of heritage) {
-      for (let i = 0; i < h.childCount; i++) {
-        const child = h.child(i)!;
-        if (child.type !== "extends" && child.type !== "implements") {
-          if (child.type === "identifier" || child.type === "type_identifier") {
-            bases.push(child.text);
-          }
+      // Walk all descendants to find identifiers (handles both JS and TS AST shapes)
+      for (const id of [
+        ...h.descendantsOfType("identifier"),
+        ...h.descendantsOfType("type_identifier"),
+      ]) {
+        // Skip the "extends" keyword node and identifiers inside implements_clause
+        if (id.parent?.type === "extends_clause" || id.parent?.type === "class_heritage") {
+          bases.push(id.text);
         }
       }
     }

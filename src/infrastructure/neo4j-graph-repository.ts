@@ -85,7 +85,7 @@ export class Neo4jGraphRepository implements GraphRepository {
   ): Promise<void> {
     const keyEntries = Object.keys(key);
     const keyClause = keyEntries.map((k) => `${k}: $key_${k}`).join(", ");
-    const setEntries = Object.keys(props);
+    const setEntries = Object.keys(props).filter((k) => props[k] !== undefined);
     const setClause =
       setEntries.length > 0
         ? "SET " + setEntries.map((k) => `n.${k} = $prop_${k}`).join(", ")
@@ -115,7 +115,7 @@ export class Neo4jGraphRepository implements GraphRepository {
       .map((k) => `${k}: $from_${k}`)
       .join(", ");
     const toClause = toEntries.map((k) => `${k}: $to_${k}`).join(", ");
-    const propEntries = Object.keys(props);
+    const propEntries = Object.keys(props).filter((k) => props[k] !== undefined);
     const propClause =
       propEntries.length > 0
         ? " {" + propEntries.map((k) => `${k}: $rel_${k}`).join(", ") + "}"

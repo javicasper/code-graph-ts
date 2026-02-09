@@ -16,7 +16,7 @@ export class AnalyzeCodeService implements AnalyzeCode {
       `MATCH (caller:Function)-[r:CALLS]->(callee:Function {name: $name})
        RETURN caller.name as caller_name, caller.path as caller_path,
               caller.line_number as caller_line, r.line_number as call_line
-       LIMIT $limit`,
+       LIMIT toInteger($limit)`,
       { name, limit },
     );
     return rows.map((r) => ({
@@ -32,7 +32,7 @@ export class AnalyzeCodeService implements AnalyzeCode {
       `MATCH (caller:Function {name: $name})-[r:CALLS]->(callee:Function)
        RETURN callee.name as callee_name, callee.path as callee_path,
               callee.line_number as callee_line, r.line_number as call_line
-       LIMIT $limit`,
+       LIMIT toInteger($limit)`,
       { name, limit },
     );
     return rows.map((r) => ({
@@ -59,7 +59,7 @@ export class AnalyzeCodeService implements AnalyzeCode {
        WHERE NOT ()-[:CALLS]->(f) ${where}
          AND (f.kind IS NULL OR f.kind <> 'constructor')
        RETURN f.name as name, f.path as path, f.line_number as line_number
-       LIMIT $limit`,
+       LIMIT toInteger($limit)`,
       { limit, repoPath },
     );
     return rows.map((r) => ({
@@ -73,7 +73,7 @@ export class AnalyzeCodeService implements AnalyzeCode {
     const rows = await this.graph.runQuery(
       `MATCH path = (start:Function {name: $name})-[:CALLS*1..${depth}]->(end:Function)
        RETURN [n in nodes(path) | n.name] as chain
-       LIMIT $limit`,
+       LIMIT toInteger($limit)`,
       { name, limit },
     );
     return rows.map((r) => r.chain as string[]);
@@ -84,7 +84,7 @@ export class AnalyzeCodeService implements AnalyzeCode {
       `MATCH (f:File)-[r:IMPORTS]->(m:Module)
        WHERE r.imported_name = $name OR m.name CONTAINS $name
        RETURN f.path as file_path, m.name as module, r.imported_name as imported_name
-       LIMIT $limit`,
+       LIMIT toInteger($limit)`,
       { name, limit },
     );
     return rows.map((r) => ({
@@ -99,7 +99,7 @@ export class AnalyzeCodeService implements AnalyzeCode {
       `MATCH (f:File)-[:IMPORTS]->(m:Module)
        WHERE f.path CONTAINS $name OR f.name = $name
        RETURN DISTINCT m.name as module
-       LIMIT $limit`,
+       LIMIT toInteger($limit)`,
       { name, limit },
     );
     return rows.map((r) => r.module as string);
@@ -111,7 +111,7 @@ export class AnalyzeCodeService implements AnalyzeCode {
        WHERE f.name CONTAINS $name
        RETURN f.name as name, f.path as path, f.cyclomatic_complexity as complexity
        ORDER BY f.cyclomatic_complexity DESC
-       LIMIT $limit`,
+       LIMIT toInteger($limit)`,
       { name, limit },
     );
     return rows.map((r) => ({
@@ -127,7 +127,7 @@ export class AnalyzeCodeService implements AnalyzeCode {
       `MATCH (f:Function) ${where}
        RETURN f.name as name, f.path as path, f.line_number as line_number,
               f.cyclomatic_complexity as complexity
-       ORDER BY f.cyclomatic_complexity DESC LIMIT $limit`,
+       ORDER BY f.cyclomatic_complexity DESC LIMIT toInteger($limit)`,
       { limit, repoPath },
     );
     return rows.map((r) => ({

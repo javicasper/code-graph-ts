@@ -15,7 +15,7 @@ export class SearchCodeService implements SearchCode {
          YIELD node, score
          RETURN labels(node) as labels, node.name as name, node.path as path,
                 node.line_number as line_number, score
-         ORDER BY score DESC LIMIT $limit`,
+         ORDER BY score DESC LIMIT toInteger($limit)`,
         { query, limit },
       );
       return rows.map((r) => ({
@@ -30,7 +30,7 @@ export class SearchCodeService implements SearchCode {
       const rows = await this.graph.runQuery(
         `MATCH (n) WHERE (n:Function OR n:Class OR n:Variable) AND n.name CONTAINS $query
          RETURN labels(n) as labels, n.name as name, n.path as path, n.line_number as line_number
-         LIMIT $limit`,
+         LIMIT toInteger($limit)`,
         { query, limit },
       );
       return rows.map((r) => ({
