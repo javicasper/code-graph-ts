@@ -9,6 +9,8 @@ import type {
   DeadCodeResult,
   ImporterResult,
   ComplexityResult,
+  SymbolSummary,
+  SemanticSearchResult,
 } from "./types.js";
 
 // ── Outbound ports ──────────────────────────────────────────────
@@ -30,11 +32,18 @@ export type QueryResultRows = QueryResultRow[];
 
 export interface GraphReader {
   runQuery(cypher: string, params?: Record<string, unknown>): Promise<QueryResultRows>;
+  vectorSearch(embedding: number[], limit: number): Promise<SemanticSearchResult[]>;
+  getContentHash(label: string, key: Record<string, unknown>): Promise<string | null>;
 }
 
 export interface GraphWriter {
   ensureSchema(): Promise<void>;
-  mergeNode(label: string, key: Record<string, unknown>, props?: Record<string, unknown>): Promise<void>;
+  mergeNode(
+    label: string,
+    key: Record<string, unknown>,
+    props?: Record<string, unknown>,
+  ): Promise<void>;
+
   mergeRelationship(
     fromLabel: string,
     fromKey: Record<string, unknown>,
@@ -43,22 +52,38 @@ export interface GraphWriter {
     relType: string,
     props?: Record<string, unknown>,
   ): Promise<void>;
+
   deleteFileNodes(filePath: string): Promise<void>;
   deleteRepository(repoPath: string): Promise<void>;
   deleteAll(): Promise<void>;
+
+  // Batch operations
+  executeBatch(fn: () => Promise<void>): Promise<void>;
+
+  // Vector operations
+  ensureVectorIndex(): Promise<void>;
+  setNodeEmbedding(
+    label: string,
+    key: Record<string, unknown>,
+    embedding: number[],
+    description: string,
+    contentHash: string,
+  ): Promise<void>;
+
+  // Direct query execution (needed for complex match/merge patterns)
+  runQuery(cypher: string, params?: Record<string, unknown>): Promise<QueryResultRows>;
 }
 
 export interface GraphRepository extends GraphReader, GraphWriter {
   verifyConnectivity(): Promise<void>;
   close(): Promise<void>;
-  /** Run all operations within fn in a single transaction. */
-  executeBatch(fn: () => Promise<void>): Promise<void>;
 }
 
 export interface Logger {
   info(msg: string, ...args: unknown[]): void;
   error(msg: string, ...args: unknown[]): void;
   warn(msg: string, ...args: unknown[]): void;
+  debug(msg: string, ...args: unknown[]): void;
 }
 
 export interface JobStore {
@@ -69,6 +94,12 @@ export interface JobStore {
 }
 
 // ── Inbound ports (use cases) ───────────────────────────────────
+
+export interface LanguageParser {
+  supportedExtensions: string[];
+  parse(source: string, filePath: string, isDependency?: boolean): ParsedFile;
+  preScan(files: { filePath: string; sourceCode: string }[]): ImportsMap;
+}
 
 export interface IndexCode {
   indexDirectory(dirPath: string, isDependency?: boolean): Promise<string>;
@@ -112,4 +143,22 @@ export interface ManageRepositories {
   deleteRepository(repoPath: string): Promise<void>;
   deleteAll(): Promise<void>;
   getStats(repoPath?: string): Promise<GraphStats>;
+}
+
+// ── Semantic Search Ports ───────────────────────────────────────
+
+export interface DescriptionGenerator {
+  generateDescription(prompt: string): Promise<string | null>;
+}
+
+export interface EmbeddingGenerator {
+  generateEmbedding(text: string): Promise<number[]>;
+}
+
+export interface DescribeCode {
+  describeFile(parsedFile: ParsedFile): Promise<SymbolSummary[]>;
+}
+
+export interface SemanticSearch {
+  search(query: string, limit: number): Promise<SemanticSearchResult[]>;
 }

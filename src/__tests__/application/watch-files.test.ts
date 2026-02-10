@@ -31,8 +31,12 @@ describe("WatchFilesService", () => {
       info: vi.fn(),
       error: vi.fn(),
       warn: vi.fn(),
+      debug: vi.fn(),
     };
-    service = new WatchFilesService(mockIndexCode, mockLogger);
+    const mockDescribeCode = {
+      describeFile: vi.fn(),
+    };
+    service = new WatchFilesService(mockIndexCode, mockDescribeCode, mockLogger);
   });
 
   it("should start watching a directory", async () => {

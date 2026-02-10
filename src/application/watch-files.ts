@@ -1,6 +1,7 @@
 import { watch, type FSWatcher } from "chokidar";
 import { resolve, extname } from "node:path";
-import type { WatchFiles, IndexCode, Logger } from "../domain/ports.js";
+import type { IndexCode, DescribeCode } from "../domain/ports.js";
+import type { Logger } from "../domain/logger.js";
 import type { ImportsMap } from "../domain/types.js";
 
 const SUPPORTED_EXTENSIONS = new Set([
@@ -11,15 +12,16 @@ const SUPPORTED_EXTENSIONS = new Set([
 
 const DEBOUNCE_MS = 2000;
 
-export class WatchFilesService implements WatchFiles {
+export class WatchFilesService {
   private watchers = new Map<string, FSWatcher>();
   private importsMapCache = new Map<string, ImportsMap>();
   private debounceTimers = new Map<string, NodeJS.Timeout>();
 
   constructor(
     private readonly indexCode: IndexCode,
+    private readonly describeCode: DescribeCode,
     private readonly logger: Logger,
-  ) {}
+  ) { }
 
   async watch(dirPath: string): Promise<void> {
     const absPath = resolve(dirPath);
@@ -88,8 +90,16 @@ export class WatchFilesService implements WatchFiles {
         try {
           this.logger.info(`Re-indexing: ${filePath}`);
           const importsMap = this.importsMapCache.get(repoPath) ?? new Map();
-          await this.indexCode.indexFile(filePath, repoPath, importsMap);
-          this.logger.info(`Re-indexed: ${filePath}`);
+
+          // 1. Index structure (AST -> Graph)
+          const parsed = await this.indexCode.indexFile(filePath, repoPath, importsMap);
+
+          // 2. Describe & Embed (AI -> Graph)
+          if (parsed) {
+            await this.describeCode.describeFile(parsed);
+          }
+
+          this.logger.info(`Re-indexed and described: ${filePath}`);
         } catch (err) {
           this.logger.error(`Error re-indexing ${filePath}:`, err);
         }

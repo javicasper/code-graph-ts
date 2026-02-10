@@ -9,11 +9,14 @@ describe("SearchCodeService", () => {
   beforeEach(() => {
     mockGraph = {
       runQuery: vi.fn(),
+      vectorSearch: vi.fn(),
+      getContentHash: vi.fn(),
     };
     mockLogger = {
       info: vi.fn(),
       error: vi.fn(),
       warn: vi.fn(),
+      debug: vi.fn(),
     };
   });
 

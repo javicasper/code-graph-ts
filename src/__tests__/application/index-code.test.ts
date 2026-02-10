@@ -6,6 +6,10 @@ import type { LanguageParser, ParsedFile, ImportsMap } from "../../domain/types.
 
 function createMockGraph(): GraphRepository {
   return {
+    ensureVectorIndex: vi.fn().mockResolvedValue(undefined),
+    setNodeEmbedding: vi.fn().mockResolvedValue(undefined),
+    vectorSearch: vi.fn().mockResolvedValue([]),
+    getContentHash: vi.fn().mockResolvedValue(null),
     verifyConnectivity: vi.fn().mockResolvedValue(undefined),
     ensureSchema: vi.fn().mockResolvedValue(undefined),
     runQuery: vi.fn().mockResolvedValue([]),
@@ -53,8 +57,13 @@ function createMockLogger(): Logger {
     info: vi.fn(),
     error: vi.fn(),
     warn: vi.fn(),
+    debug: vi.fn(),
   };
 }
+
+const mockDescribeCode = {
+  describeFile: vi.fn().mockResolvedValue([]),
+};
 
 describe("IndexCodeService", () => {
   let graph: GraphRepository;
@@ -70,7 +79,7 @@ describe("IndexCodeService", () => {
     parser = createMockParser();
     jobStore = new InMemoryJobStore();
     logger = createMockLogger();
-    service = new IndexCodeService(graph, fs, [parser], jobStore, logger);
+    service = new IndexCodeService(fs, graph, parser, mockDescribeCode, jobStore, logger);
   });
 
   it("indexes a directory and creates a job", async () => {

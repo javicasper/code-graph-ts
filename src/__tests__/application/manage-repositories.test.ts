@@ -14,6 +14,10 @@ function mockGraphRepository(): GraphRepository {
     verifyConnectivity: vi.fn(),
     close: vi.fn(),
     executeBatch: vi.fn(async (fn: () => Promise<void>) => fn()),
+    ensureVectorIndex: vi.fn(),
+    setNodeEmbedding: vi.fn(),
+    vectorSearch: vi.fn(),
+    getContentHash: vi.fn(),
   };
 }
 

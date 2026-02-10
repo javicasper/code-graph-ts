@@ -3,6 +3,8 @@ import type {
   GraphRepository,
   IndexCode,
   SearchCode,
+  DescribeCode,
+  SemanticSearch,
   AnalyzeCode,
   WatchFiles,
   ManageRepositories,
@@ -12,23 +14,31 @@ import type {
 import { Neo4jGraphRepository } from "./infrastructure/neo4j-graph-repository.js";
 import { NodeFileSystem } from "./infrastructure/node-filesystem.js";
 import { ConsoleLogger } from "./infrastructure/console-logger.js";
+import { ZaiClient } from "./infrastructure/zai-client.js";
+import { LocalEmbeddingClient } from "./infrastructure/local-embedding.js";
 import { JavaScriptParser } from "./domain/parsers/javascript.js";
 import { TypeScriptParser } from "./domain/parsers/typescript.js";
 import { PHPParser } from "./domain/parsers/php.js";
 import { InMemoryJobStore } from "./application/job-store.js";
+import { DescribeCodeService } from "./application/describe-code.js";
+import { SemanticSearchService } from "./application/semantic-search.js";
 import { IndexCodeService } from "./application/index-code.js";
 import { SearchCodeService } from "./application/search-code.js";
 import { AnalyzeCodeService } from "./application/analyze-code.js";
 import { WatchFilesService } from "./application/watch-files.js";
 import { ManageRepositoriesService } from "./application/manage-repositories.js";
+import { DoctorService } from "./application/doctor.js";
 
 export interface AppServices {
   graph: GraphRepository;
   indexCode: IndexCode;
   searchCode: SearchCode;
+  describeCode: DescribeCode;
+  semanticSearch: SemanticSearch;
   analyzeCode: AnalyzeCode;
   watchFiles: WatchFiles;
   manageRepos: ManageRepositories;
+  doctor: DoctorService;
   jobs: JobStore;
   logger: Logger;
 }
@@ -47,11 +57,46 @@ export function createAppServices(config: AppConfig): AppServices {
     new PHPParser(),
   ];
   const jobs = new InMemoryJobStore();
-  const indexCode = new IndexCodeService(graph, fs, parsers, jobs, logger);
+
+  // New Semantic Search Infrastructure
+  // Default to empty/no-op implementations caused problems in previous attempts,
+  // so we will instantiate the real clients but they might return null/empty if config is missing.
+  // ZaiClient handles missing apiKey gracefully.
+  const descriptionGenerator = new ZaiClient(
+    config.zaiApiKey ?? "",
+    config.zaiBaseUrl,
+    config.zaiDescriptionModel
+  );
+  const embeddingGenerator = new LocalEmbeddingClient();
+
+  const describeCode = new DescribeCodeService(descriptionGenerator, embeddingGenerator, graph, logger);
+  const semanticSearch = new SemanticSearchService(embeddingGenerator, graph);
+
+  // Updated Services with new dependencies
+  const indexCode = new IndexCodeService(fs, graph, new TypeScriptParser(), describeCode, jobs, logger);
   const searchCode = new SearchCodeService(graph, logger);
   const analyzeCode = new AnalyzeCodeService(graph);
-  const watchFiles = new WatchFilesService(indexCode, logger);
+  const watchFiles = new WatchFilesService(indexCode, describeCode, logger);
   const manageRepos = new ManageRepositoriesService(graph);
+  const doctor = new DoctorService(
+    graph,
+    descriptionGenerator,
+    embeddingGenerator,
+    logger,
+    { useLocalEmbeddings: config.useLocalEmbeddings ?? false }
+  );
 
-  return { graph, indexCode, searchCode, analyzeCode, watchFiles, manageRepos, jobs, logger };
+  return {
+    graph,
+    indexCode,
+    searchCode,
+    describeCode,
+    semanticSearch,
+    analyzeCode,
+    watchFiles,
+    manageRepos,
+    doctor,
+    jobs,
+    logger
+  };
 }

@@ -5,6 +5,8 @@ import type { GraphReader } from "../../domain/ports.js";
 function createMockGraphReader(returnRows: Record<string, unknown>[] = []): GraphReader {
   return {
     runQuery: vi.fn().mockResolvedValue(returnRows),
+    vectorSearch: vi.fn(),
+    getContentHash: vi.fn(),
   };
 }
 

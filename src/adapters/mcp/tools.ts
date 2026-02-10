@@ -35,6 +35,18 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
+    name: "semantic_search",
+    description: "Search for code by meaning/intent using natural language (e.g., 'find code that handles user login'). Uses vector embeddings.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Natural language query describing the functionality to look for" },
+        limit: { type: "number", description: "Max number of results to return", default: 10 },
+      },
+      required: ["query"],
+    },
+  },
+  {
     name: "analyze_code_relationships",
     description: "Analyze code relationships: find_callers, find_callees, class_hierarchy, dead_code, call_chain, find_importers, module_deps, find_complexity.",
     inputSchema: {
@@ -195,6 +207,12 @@ export function createToolHandler(services: AppServices) {
         const query = args.query as string;
         const limit = (args.limit as number) ?? 20;
         return searchCode.fulltextSearch(query, limit);
+      }
+
+      case "semantic_search": {
+        const query = args.query as string;
+        const limit = (args.limit as number) ?? 10;
+        return services.semanticSearch.search(query, limit);
       }
 
       case "analyze_code_relationships": {

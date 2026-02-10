@@ -11,6 +11,10 @@ const config = loadConfig();
 const services = createAppServices(config);
 const { graph, indexCode, analyzeCode, manageRepos, watchFiles: watchService, jobs } = services;
 
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+
 const program = new Command();
 
 program
@@ -150,6 +154,166 @@ program
       console.error("Error:", err);
       await graph.close();
       process.exitCode = 1;
+    }
+  });
+
+// ── search ──────────────────────────────────────────────────────
+
+program
+  .command("search")
+  .description("Semantic search for code")
+  .argument("<query>", "Natural language query")
+  .option("-l, --limit <n>", "Max results", "5")
+  .action(async (query: string, opts: { limit: string }) => {
+    try {
+      await graph.verifyConnectivity();
+      const results = await services.semanticSearch.search(query, parseInt(opts.limit, 10));
+
+      if (results.length === 0) {
+        console.log("No results found.");
+      } else {
+        console.log(`Results for "${query}":`);
+        for (const r of results) {
+          console.log(`\n[${r.score?.toFixed(3) ?? "?"}] ${r.kind} ${r.name}`);
+          console.log(`  Path: ${r.path}:${r.lineNumber}`);
+          console.log(`  Desc: ${r.description}`);
+        }
+      }
+    } catch (err) {
+      console.error("Error:", err);
+      process.exitCode = 1;
+    } finally {
+      await graph.close();
+    }
+  });
+
+// ── config ──────────────────────────────────────────────────────
+
+program
+  .command("config")
+  .description("Configure settings (defaults to global ~/.codegraph/.env)")
+  .option("--zai-api-key <key>", "Set Z.ai API Key")
+  .option("--zai-base-url <url>", "Set Z.ai Base URL")
+  .option("--zai-model <model>", "Set Z.ai Model")
+  .option("--local-embeddings <true|false>", "Enable/disable local embeddings")
+  .option("--local", "Update local .env file instead of global", false)
+  .action(async (opts: {
+    zaiApiKey?: string,
+    zaiBaseUrl?: string,
+    zaiModel?: string,
+    localEmbeddings?: string,
+    local?: boolean
+  }) => {
+    let configFile: string;
+
+    if (opts.local) {
+      configFile = resolve(".env");
+    } else {
+      const configDir = join(homedir(), ".codegraph");
+      if (!existsSync(configDir)) {
+        mkdirSync(configDir, { recursive: true });
+      }
+      configFile = join(configDir, ".env");
+    }
+
+    let envContent = "";
+    if (existsSync(configFile)) {
+      envContent = readFileSync(configFile, "utf-8");
+    }
+
+    const envMap = new Map<string, string>();
+    envContent.split("\n").forEach(line => {
+      const [key, ...rest] = line.split("=");
+      if (key && rest.length > 0) {
+        envMap.set(key.trim(), rest.join("=").trim());
+      }
+    });
+
+    let updated = false;
+
+    if (opts.zaiApiKey) {
+      envMap.set("ZAI_API_KEY", opts.zaiApiKey);
+      console.log("✅ Updated ZAI_API_KEY");
+      updated = true;
+    }
+
+    if (opts.zaiBaseUrl) {
+      envMap.set("ZAI_BASE_URL", opts.zaiBaseUrl);
+      console.log(`✅ Updated ZAI_BASE_URL to ${opts.zaiBaseUrl}`);
+      updated = true;
+    }
+
+    if (opts.zaiModel) {
+      envMap.set("ZAI_DESCRIPTION_MODEL", opts.zaiModel);
+      console.log(`✅ Updated ZAI_DESCRIPTION_MODEL to ${opts.zaiModel}`);
+      updated = true;
+    }
+
+    if (opts.localEmbeddings) {
+      const val = opts.localEmbeddings === "true";
+      envMap.set("USE_LOCAL_EMBEDDINGS", String(val));
+      console.log(`✅ Updated USE_LOCAL_EMBEDDINGS to ${val}`);
+      updated = true;
+    }
+
+    if (!updated) {
+      console.log(`Current Configuration (${configFile}):`);
+      if (envMap.size === 0) console.log("  (empty)");
+      for (const [k, v] of envMap) {
+        // Mask API key
+        const displayVal = k.includes("KEY") || k.includes("PASSWORD")
+          ? v.slice(0, 4) + "..." + v.slice(-4)
+          : v;
+        console.log(`  ${k}=${displayVal}`);
+      }
+      console.log("\nOptions:");
+      console.log("  --zai-api-key <key>");
+      console.log("  --zai-base-url <url>");
+      console.log("  --zai-model <model>");
+      console.log("  --local-embeddings <true|false>");
+      console.log("  --local (to update local .env)");
+    } else {
+      const newContent = Array.from(envMap.entries())
+        .map(([k, v]) => `${k}=${v}`)
+        .join("\n");
+      writeFileSync(configFile, newContent);
+      console.log(`\nConfiguration saved to ${configFile}`);
+    }
+  });
+
+// ── doctor ──────────────────────────────────────────────────────
+
+program
+  .command("doctor")
+  .description("Check health of system components (Neo4j, Zai, Embeddings)")
+  .action(async () => {
+    console.log("Running health checks...");
+    try {
+      const results = await services.doctor.checkHealth();
+      let allOk = true;
+
+      for (const res of results) {
+        const icon = res.status === "ok" ? "✅" : res.status === "skipped" ? "⏭️" : "❌";
+        console.log(`${icon} ${res.component}`);
+        if (res.status === "ok") {
+          console.log(`   Status: OK (${res.latencyMs}ms)`);
+        } else if (res.status === "skipped") {
+          console.log(`   Status: SKIPPED`);
+        } else {
+          console.log(`   Status: ERROR`);
+          console.log(`   Message: ${res.message}`);
+          allOk = false;
+        }
+        console.log("");
+      }
+
+      if (!allOk) process.exitCode = 1;
+
+    } catch (err) {
+      console.error("Doctor failed:", err);
+      process.exitCode = 1;
+    } finally {
+      await graph.close();
     }
   });
 

@@ -3,7 +3,7 @@ import type { GraphStats } from "../domain/types.js";
 import { toCount } from "../domain/neo4j-helpers.js";
 
 export class ManageRepositoriesService implements ManageRepositories {
-  constructor(private readonly graph: GraphRepository) {}
+  constructor(private readonly graph: GraphRepository) { }
 
   async listRepositories(): Promise<{ path: string; name: string }[]> {
     const rows = await this.graph.runQuery(
@@ -29,16 +29,16 @@ export class ManageRepositoriesService implements ManageRepositories {
 
     const [repos, files, functions, classes, variables, rels] = await Promise.all([
       this.graph.runQuery(
-        `MATCH (r:Repository) ${repoPath ? "WHERE r.path = $repoPath" : ""} RETURN count(r) as c`,
+        `MATCH (n:Repository) ${repoPath ? "WHERE n.path = $repoPath" : ""} RETURN count(n) as c`,
         params,
       ),
       this.graph.runQuery(
-        `MATCH (f:File) ${repoPath ? "WHERE f.repo_path = $repoPath" : ""} RETURN count(f) as c`,
+        `MATCH (n:File) ${where} RETURN count(n) as c`,
         params,
       ),
-      this.graph.runQuery(`MATCH (f:Function) ${where} RETURN count(f) as c`, params),
-      this.graph.runQuery(`MATCH (c:Class) ${where} RETURN count(c) as c`, params),
-      this.graph.runQuery(`MATCH (v:Variable) ${where} RETURN count(v) as c`, params),
+      this.graph.runQuery(`MATCH (n:Function) ${where} RETURN count(n) as c`, params),
+      this.graph.runQuery(`MATCH (n:Class) ${where} RETURN count(n) as c`, params),
+      this.graph.runQuery(`MATCH (n:Variable) ${where} RETURN count(n) as c`, params),
       this.graph.runQuery("MATCH ()-[r]->() RETURN count(r) as c"),
     ]);
 

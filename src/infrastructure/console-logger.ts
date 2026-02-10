@@ -5,6 +5,10 @@ export class ConsoleLogger implements Logger {
     console.log(`[INFO] ${msg}`, ...args);
   }
 
+  debug(msg: string, ...args: unknown[]): void {
+    console.debug(`[DEBUG] ${msg}`, ...args);
+  }
+
   error(msg: string, ...args: unknown[]): void {
     console.error(`[ERROR] ${msg}`, ...args);
   }

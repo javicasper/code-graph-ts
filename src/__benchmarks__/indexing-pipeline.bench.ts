@@ -50,15 +50,19 @@ let sessionCount = 0;
 
 function createCountingGraph(): GraphRepository {
   return {
-    verifyConnectivity: async () => {},
-    ensureSchema: async () => {},
+    ensureVectorIndex: async () => { },
+    setNodeEmbedding: async () => { },
+    vectorSearch: async () => [],
+    getContentHash: async () => null,
+    verifyConnectivity: async () => { },
+    ensureSchema: async () => { },
     runQuery: async () => { sessionCount++; return []; },
     mergeNode: async () => { sessionCount++; },
     mergeRelationship: async () => { sessionCount++; },
     deleteFileNodes: async () => { sessionCount++; },
-    deleteRepository: async () => {},
-    deleteAll: async () => {},
-    close: async () => {},
+    deleteRepository: async () => { },
+    deleteAll: async () => { },
+    close: async () => { },
     executeBatch: async (fn) => {
       sessionCount++; // 1 session for the entire batch
       await fn();
@@ -75,9 +79,14 @@ function createMockFs(): FileSystem {
 }
 
 const noopLogger: Logger = {
-  info: () => {},
-  error: () => {},
-  warn: () => {},
+  info: () => { },
+  error: () => { },
+  warn: () => { },
+  debug: () => { },
+};
+
+const mockDescribeCode = {
+  describeFile: async () => [],
 };
 
 // ── Benchmarks ──────────────────────────────────────────────────
@@ -87,13 +96,13 @@ describe("Indexing Pipeline", () => {
 
   bench("indexFile (single file, mock graph)", async () => {
     const graph = createCountingGraph();
-    const service = new IndexCodeService(graph, createMockFs(), [parser], new InMemoryJobStore(), noopLogger);
+    const service = new IndexCodeService(createMockFs(), graph, parser, mockDescribeCode, new InMemoryJobStore(), noopLogger);
     await service.indexFile("/project/src/index.js", "/project", new Map());
   });
 
   bench("indexDirectory (1 file, full pipeline)", async () => {
     const graph = createCountingGraph();
-    const service = new IndexCodeService(graph, createMockFs(), [parser], new InMemoryJobStore(), noopLogger);
+    const service = new IndexCodeService(createMockFs(), graph, parser, mockDescribeCode, new InMemoryJobStore(), noopLogger);
     await service.indexDirectory("/project");
   });
 
@@ -108,7 +117,7 @@ describe("Session count measurement", () => {
   bench("count graph operations per indexFile", async () => {
     sessionCount = 0;
     const graph = createCountingGraph();
-    const service = new IndexCodeService(graph, createMockFs(), [parser], new InMemoryJobStore(), noopLogger);
+    const service = new IndexCodeService(createMockFs(), graph, parser, mockDescribeCode, new InMemoryJobStore(), noopLogger);
     await service.indexFile("/project/src/index.js", "/project", new Map());
     // With executeBatch: sessionCount should be ~1 (the batch) + inner calls
     // Without: would be ~40+ individual sessions

@@ -96,6 +96,9 @@ export interface IndexJob {
 
 // ── Graph stats ─────────────────────────────────────────────────
 
+
+// ── Graph stats ─────────────────────────────────────────────────
+
 export interface GraphStats {
   repositories: number;
   files: number;
@@ -103,6 +106,26 @@ export interface GraphStats {
   classes: number;
   variables: number;
   relationships: number;
+}
+
+// ── Semantic Search Types ───────────────────────────────────────
+
+export interface SymbolSummary {
+  name: string;
+  kind: "function" | "class" | "variable";
+  path: string;
+  lineNumber: number;
+  description: string;
+  contentHash: string; // SHA-256 of source to avoid re-generating
+}
+
+export interface SemanticSearchResult {
+  name: string;
+  kind: string;
+  path: string;
+  lineNumber?: number;
+  description: string;
+  score: number;
 }
 
 // ── Result types for analysis ───────────────────────────────────

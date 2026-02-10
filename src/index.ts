@@ -30,7 +30,7 @@ export type {
   Logger,
   JobStore,
   IndexCode,
-  SearchCode,
+  SearchCode, // Added SearchCode type export
   AnalyzeCode,
   WatchFiles,
   ManageRepositories,
@@ -48,6 +48,7 @@ export { SearchCodeService } from "./application/search-code.js";
 export { AnalyzeCodeService } from "./application/analyze-code.js";
 export { WatchFilesService } from "./application/watch-files.js";
 export { ManageRepositoriesService } from "./application/manage-repositories.js";
+export { DoctorService } from "./application/doctor.js";
 export { InMemoryJobStore } from "./application/job-store.js";
 
 // ── Infrastructure ──────────────────────────────────────────────
