@@ -60,7 +60,8 @@ export interface ParsedVariable {
 export interface ParsedFile {
   path: string;
   repoPath: string;
-  lang: SupportedLanguage;
+  lang: string;
+  source?: string; // Full source code
   functions: ParsedFunction[];
   classes: ParsedClass[];
   imports: ParsedImport[];

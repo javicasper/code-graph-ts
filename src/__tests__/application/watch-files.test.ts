@@ -35,6 +35,7 @@ describe("WatchFilesService", () => {
     };
     const mockDescribeCode = {
       describeFile: vi.fn(),
+      describeDirectory: vi.fn(),
     };
     service = new WatchFilesService(mockIndexCode, mockDescribeCode, mockLogger);
   });

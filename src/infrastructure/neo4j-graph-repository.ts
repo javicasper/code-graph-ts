@@ -27,6 +27,10 @@ const VECTOR_INDEXES = [
   `CREATE VECTOR INDEX class_embeddings IF NOT EXISTS FOR (n:Class) ON (n.embedding)
    OPTIONS {indexConfig: { \`vector.dimensions\`: 384, \`vector.similarity_function\`: 'cosine' }}`,
   `CREATE VECTOR INDEX variable_embeddings IF NOT EXISTS FOR (n:Variable) ON (n.embedding)
+   OPTIONS {indexConfig: { \`vector.dimensions\`: 384, \`vector.similarity_function\`: 'cosine' }}`,
+  `CREATE VECTOR INDEX file_embeddings IF NOT EXISTS FOR (n:File) ON (n.embedding)
+   OPTIONS {indexConfig: { \`vector.dimensions\`: 384, \`vector.similarity_function\`: 'cosine' }}`,
+  `CREATE VECTOR INDEX directory_embeddings IF NOT EXISTS FOR (n:Directory) ON (n.embedding)
    OPTIONS {indexConfig: { \`vector.dimensions\`: 384, \`vector.similarity_function\`: 'cosine' }}`
 ];
 
@@ -95,13 +99,17 @@ export class Neo4jGraphRepository implements GraphRepository {
     const cypher = `
       CALL {
         CALL db.index.vector.queryNodes('function_embeddings', $limit, $embedding) YIELD node, score RETURN node, score
-      UNION
+        UNION
         CALL db.index.vector.queryNodes('class_embeddings', $limit, $embedding) YIELD node, score RETURN node, score
-      UNION
+        UNION
         CALL db.index.vector.queryNodes('variable_embeddings', $limit, $embedding) YIELD node, score RETURN node, score
-    }
+        UNION
+        CALL db.index.vector.queryNodes('file_embeddings', $limit, $embedding) YIELD node, score RETURN node, score
+        UNION
+        CALL db.index.vector.queryNodes('directory_embeddings', $limit, $embedding) YIELD node, score RETURN node, score
+      }
       RETURN node.name as name, labels(node) as labels, node.path as path,
-      node.line_number as line_number, node.description as description, score
+             node.line_number as line_number, node.description as description, score
       ORDER BY score DESC
       LIMIT $limit
     `;
@@ -109,8 +117,8 @@ export class Neo4jGraphRepository implements GraphRepository {
     const rows = await this.runQuery(cypher, { embedding, limit: neo4j.int(limit) });
 
     return rows.map(row => ({
-      name: row.name as string,
-      kind: (row.labels as string[]).find(l => ["Function", "Class", "Variable"].includes(l))?.toLowerCase() ?? "unknown",
+      name: (row.name as string) || (row.path as string)?.split('/').pop() || (row.path as string) || "unknown",
+      kind: (row.labels as string[]).find(l => ["Function", "Class", "Variable", "File", "Directory"].includes(l))?.toLowerCase() ?? "unknown",
       path: row.path as string,
       lineNumber: typeof row.line_number === 'object' ? (row.line_number as any).low : row.line_number as number,
       description: row.description as string,

@@ -63,6 +63,7 @@ function createMockLogger(): Logger {
 
 const mockDescribeCode = {
   describeFile: vi.fn().mockResolvedValue([]),
+  describeDirectory: vi.fn().mockResolvedValue(undefined),
 };
 
 describe("IndexCodeService", () => {

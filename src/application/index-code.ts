@@ -93,6 +93,18 @@ export class IndexCodeService implements IndexCode {
         }
       }
 
+      // Phase 5: Directory-level descriptions
+      const dirs = new Set<string>();
+      for (const file of files) dirs.add(dirname(file));
+      for (const dir of dirs) {
+        const dirFiles = files.filter(f => dirname(f) === dir);
+        try {
+          await this.describeCode.describeDirectory(absPath, dir, dirFiles);
+        } catch (err) {
+          this.logger.error(`Error describing directory ${dir}:`, err);
+        }
+      }
+
       this.jobs.update(jobId, { status: "completed", completedAt: new Date() });
     } catch (err) {
       this.jobs.update(jobId, {
@@ -117,6 +129,7 @@ export class IndexCodeService implements IndexCode {
     const sourceCode = await this.fs.readFile(filePath);
     const parsed = parser.parse(sourceCode, filePath, isDependency);
     parsed.repoPath = repoPath;
+    parsed.source = sourceCode;
 
     // Batch all graph writes in a single transaction
     await this.graph.executeBatch(async () => {

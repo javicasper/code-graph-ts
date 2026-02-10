@@ -1,4 +1,4 @@
-import { bench, describe } from "vitest";
+import { bench, describe, vi } from "vitest";
 import { IndexCodeService } from "../application/index-code.js";
 import { InMemoryJobStore } from "../application/job-store.js";
 import { JavaScriptParser } from "../domain/parsers/javascript.js";
@@ -86,7 +86,8 @@ const noopLogger: Logger = {
 };
 
 const mockDescribeCode = {
-  describeFile: async () => [],
+  describeFile: vi.fn().mockResolvedValue([]),
+  describeDirectory: vi.fn().mockResolvedValue(undefined),
 };
 
 // ── Benchmarks ──────────────────────────────────────────────────

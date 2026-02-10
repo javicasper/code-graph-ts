@@ -156,7 +156,17 @@ export interface EmbeddingGenerator {
 }
 
 export interface DescribeCode {
+  /**
+   * Generates semantic descriptions and embeddings for symbols in a file.
+   * Also generates a description for the file node itself.
+   */
   describeFile(parsedFile: ParsedFile): Promise<SymbolSummary[]>;
+
+  /**
+   * Generates a semantic description and embedding for a directory node.
+   * Typically based on the files it contains.
+   */
+  describeDirectory(repoPath: string, dirPath: string, files: string[]): Promise<void>;
 }
 
 export interface SemanticSearch {
