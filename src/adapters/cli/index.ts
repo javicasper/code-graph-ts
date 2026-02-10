@@ -129,6 +129,52 @@ program
     }
   });
 
+// ── repo ────────────────────────────────────────────────────────
+
+const repo = program.command("repo").description("Manage indexed repositories");
+
+repo
+  .command("list")
+  .description("List all indexed repositories")
+  .action(async () => {
+    try {
+      await graph.verifyConnectivity();
+      const repos = await manageRepos.listRepositories();
+      if (repos.length === 0) {
+        console.log("No repositories indexed.");
+      } else {
+        console.log("Indexed Repositories:");
+        for (const r of repos) {
+          console.log(`  - ${r.name} (${r.path})`);
+        }
+      }
+    } catch (err) {
+      console.error("Error:", err);
+      process.exitCode = 1;
+    } finally {
+      await graph.close();
+    }
+  });
+
+repo
+  .command("delete")
+  .description("Delete a repository from the graph")
+  .argument("<path>", "Full path of the repository to delete")
+  .action(async (path: string) => {
+    try {
+      await graph.verifyConnectivity();
+      const absPath = resolve(path);
+      console.log(`Deleting repository: ${absPath}...`);
+      await manageRepos.deleteRepository(absPath);
+      console.log("✅ Repository deleted.");
+    } catch (err) {
+      console.error("Error:", err);
+      process.exitCode = 1;
+    } finally {
+      await graph.close();
+    }
+  });
+
 // ── watch ───────────────────────────────────────────────────────
 
 program
@@ -179,6 +225,32 @@ program
           console.log(`  Path: ${r.path}:${r.lineNumber}`);
           console.log(`  Desc: ${r.description}`);
         }
+      }
+    } catch (err) {
+      console.error("Error:", err);
+      process.exitCode = 1;
+    } finally {
+      await graph.close();
+    }
+  });
+
+// ── ask ────────────────────────────────────────────────────────
+
+program
+  .command("ask")
+  .description("Ask a question about the indexed codebase")
+  .argument("<question>", "Question in natural language")
+  .option("-l, --limit <n>", "Number of symbols to consider", "12")
+  .action(async (question: string, opts: { limit: string }) => {
+    try {
+      await graph.verifyConnectivity();
+      const result = await services.askCode.ask(question, {
+        limit: parseInt(opts.limit, 10),
+      });
+      console.log(result.answer);
+      console.log("\nSources:");
+      for (const s of result.sources) {
+        console.log(`  [${s.score.toFixed(3)}] ${s.kind} ${s.name} (${s.path}:${s.lineNumber ?? "?"})`);
       }
     } catch (err) {
       console.error("Error:", err);

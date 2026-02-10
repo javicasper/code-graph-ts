@@ -62,6 +62,8 @@ function createCountingGraph(): GraphRepository {
     deleteFileNodes: async () => { sessionCount++; },
     deleteRepository: async () => { },
     deleteAll: async () => { },
+    getRepositoryFileHashes: async () => ({}),
+    getImportsMapForFiles: async () => new Map(),
     close: async () => { },
     executeBatch: async (fn) => {
       sessionCount++; // 1 session for the entire batch

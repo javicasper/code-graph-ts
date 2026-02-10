@@ -142,6 +142,19 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
+    name: "ask_codebase",
+    description: "Ask a natural language question about the indexed codebase. Uses RAG with graph context to generate an answer.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        question: { type: "string", description: "Question about the codebase" },
+        limit: { type: "number", description: "Number of symbols to consider", default: 12 },
+        repo_path: { type: "string", description: "Filter by repository path" },
+      },
+      required: ["question"],
+    },
+  },
+  {
     name: "list_indexed_repositories",
     description: "List all repositories that have been indexed in the graph.",
     inputSchema: { type: "object", properties: {} },
@@ -261,6 +274,13 @@ export function createToolHandler(services: AppServices) {
         const limit = (args.limit as number) ?? 50;
         const repoPath = args.repo_path as string | undefined;
         return analyzeCode.deadCode(limit, repoPath);
+      }
+
+      case "ask_codebase": {
+        const question = args.question as string;
+        const limit = (args.limit as number) ?? 12;
+        const repoPath = args.repo_path as string | undefined;
+        return services.askCode.ask(question, { limit, repoPath });
       }
 
       case "list_indexed_repositories": {

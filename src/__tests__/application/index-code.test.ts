@@ -18,6 +18,8 @@ function createMockGraph(): GraphRepository {
     deleteFileNodes: vi.fn().mockResolvedValue(undefined),
     deleteRepository: vi.fn().mockResolvedValue(undefined),
     deleteAll: vi.fn().mockResolvedValue(undefined),
+    getRepositoryFileHashes: vi.fn().mockResolvedValue({}),
+    getImportsMapForFiles: vi.fn().mockResolvedValue(new Map()),
     close: vi.fn().mockResolvedValue(undefined),
     executeBatch: vi.fn(async (fn: () => Promise<void>) => fn()),
   };

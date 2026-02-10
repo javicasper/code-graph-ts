@@ -7,6 +7,8 @@ function createMockGraphReader(returnRows: Record<string, unknown>[] = []): Grap
     runQuery: vi.fn().mockResolvedValue(returnRows),
     vectorSearch: vi.fn(),
     getContentHash: vi.fn(),
+    getRepositoryFileHashes: vi.fn().mockResolvedValue({}),
+    getImportsMapForFiles: vi.fn().mockResolvedValue(new Map()),
   };
 }
 

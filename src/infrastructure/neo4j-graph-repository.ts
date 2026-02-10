@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import neo4j, { type Driver, type Session, type ManagedTransaction } from "neo4j-driver";
 import type { GraphRepository, QueryResultRows } from "../domain/ports.js";
-import type { SemanticSearchResult } from "../domain/types.js";
+import type { SemanticSearchResult, ImportsMap } from "../domain/types.js";
 
 // ── Schema DDL ──────────────────────────────────────────────────
 
@@ -140,6 +140,44 @@ export class Neo4jGraphRepository implements GraphRepository {
     );
 
     return rows.length > 0 ? (rows[0].hash as string) : null;
+  }
+
+  async getRepositoryFileHashes(repoPath: string): Promise<Record<string, string>> {
+    const rows = await this.runQuery(
+      `MATCH (r:Repository {path: $path})-[:CONTAINS]->(f:File)
+       RETURN f.path as path, f.content_hash as hash`,
+      { path: repoPath }
+    );
+    const hashes: Record<string, string> = {};
+    for (const row of rows) {
+      if (row.path && row.hash) hashes[row.path as string] = row.hash as string;
+    }
+    return hashes;
+  }
+
+  async getImportsMapForFiles(filePaths: string[]): Promise<ImportsMap> {
+    const map: ImportsMap = new Map();
+    if (filePaths.length === 0) return map;
+
+    const rows = await this.runQuery(
+      `MATCH (f:File)-[:CONTAINS]->(s)
+       WHERE f.path IN $paths AND (s:Function OR s:Class OR s:Variable)
+       RETURN s.name as name, f.path as filePath, s.line_number as lineNumber`,
+      { paths: filePaths }
+    );
+
+    for (const row of rows) {
+      const name = row.name as string;
+      const filePath = row.filePath as string;
+      const lineNumber = typeof row.lineNumber === 'object' ? (row.lineNumber as any).low : row.lineNumber as number;
+
+      if (name && filePath) {
+        if (!map.has(name)) map.set(name, []);
+        map.get(name)!.push({ filePath, lineNumber });
+      }
+    }
+
+    return map;
   }
 
   async mergeNode(

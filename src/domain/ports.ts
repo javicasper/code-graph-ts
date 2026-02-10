@@ -11,6 +11,7 @@ import type {
   ComplexityResult,
   SymbolSummary,
   SemanticSearchResult,
+  AskResult,
 } from "./types.js";
 
 // ── Outbound ports ──────────────────────────────────────────────
@@ -34,6 +35,8 @@ export interface GraphReader {
   runQuery(cypher: string, params?: Record<string, unknown>): Promise<QueryResultRows>;
   vectorSearch(embedding: number[], limit: number): Promise<SemanticSearchResult[]>;
   getContentHash(label: string, key: Record<string, unknown>): Promise<string | null>;
+  getRepositoryFileHashes(repoPath: string): Promise<Record<string, string>>;
+  getImportsMapForFiles(filePaths: string[]): Promise<ImportsMap>;
 }
 
 export interface GraphWriter {
@@ -148,7 +151,7 @@ export interface ManageRepositories {
 // ── Semantic Search Ports ───────────────────────────────────────
 
 export interface DescriptionGenerator {
-  generateDescription(prompt: string): Promise<string | null>;
+  generateDescription(prompt: string, options?: { maxTokens?: number }): Promise<string | null>;
 }
 
 export interface EmbeddingGenerator {
@@ -171,4 +174,8 @@ export interface DescribeCode {
 
 export interface SemanticSearch {
   search(query: string, limit: number): Promise<SemanticSearchResult[]>;
+}
+
+export interface AskCode {
+  ask(question: string, options?: { limit?: number; repoPath?: string }): Promise<AskResult>;
 }

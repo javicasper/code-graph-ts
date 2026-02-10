@@ -49,34 +49,70 @@ export class IndexCodeService implements IndexCode {
     try {
       await (this.graph as any).ensureSchema?.();
 
-      const files = await this.collectFiles(absPath);
-      this.jobs.update(jobId, { filesTotal: files.length });
+      const allFiles = await this.collectFiles(absPath);
+      this.jobs.update(jobId, { filesTotal: allFiles.length });
 
-      if (files.length === 0) {
+      if (allFiles.length === 0) {
         this.jobs.update(jobId, { status: "completed", completedAt: new Date() });
         return jobId;
       }
 
-      // Phase 1: Pre-scan all files to build ImportsMap
-      const importsMap = await this.preScanAll(files);
+      // 0. Pre-fetch existing hashes from the graph for this repo
+      this.logger.info(`Checking existing state for ${allFiles.length} files...`);
+      const existingHashes = await this.graph.getRepositoryFileHashes(absPath);
 
-      // Phase 2: Parse & insert nodes (parallel processing of files)
-      const allParsedFiles: ParsedFile[] = await mapWithConcurrency(files, 4, async (filePath) => {
+      const dirtyFiles: string[] = [];
+      const skippedFiles: string[] = [];
+
+      // Fast hashing to identify what needs work
+      await mapWithConcurrency(allFiles, 10, async (filePath) => {
+        try {
+          const content = await this.fs.readFile(filePath);
+          const hash = crypto.createHash("sha256").update(content).digest("hex");
+          if (existingHashes[filePath] === hash) {
+            skippedFiles.push(filePath);
+          } else {
+            dirtyFiles.push(filePath);
+          }
+        } catch (err) {
+          this.logger.warn(`Unreadable file ${filePath}:`, err);
+          dirtyFiles.push(filePath); // Process - anyway to see error in Phase 2
+        }
+      });
+
+      this.logger.info(`Incremental plan: ${dirtyFiles.length} dirty, ${skippedFiles.length} skipped.`);
+
+      // 1. Build Global ImportsMap (Hybrid: Scan dirty + Load from graph for skipped)
+      this.logger.info("Building imports map...");
+      const importsMap = await this.preScanDirty(dirtyFiles);
+      if (skippedFiles.length > 0) {
+        const skippedMap = await this.graph.getImportsMapForFiles(skippedFiles);
+        for (const [name, locations] of skippedMap) {
+          if (!importsMap.has(name)) importsMap.set(name, []);
+          importsMap.get(name)!.push(...locations);
+        }
+      }
+
+      // 2. Phase 2: Parse & insert nodes ONLY for dirty files
+      const newParsedFiles: ParsedFile[] = await mapWithConcurrency(dirtyFiles, 4, async (filePath) => {
         try {
           const parsed = await this.indexFile(filePath, absPath, importsMap, isDependency);
-
           const current = this.jobs.get(jobId);
           this.jobs.update(jobId, { filesProcessed: (current?.filesProcessed ?? 0) + 1 });
-
           return parsed;
         } catch (err) {
-          this.logger.error(`Error parsing ${filePath}:`, err);
+          this.logger.error(`Error processing ${filePath}:`, err);
           return null;
         }
       }).then(results => results.filter((p): p is ParsedFile => p !== null));
 
-      // Phase 3: Link inheritance (batched per file)
-      for (const parsed of allParsedFiles) {
+      // We still need the structure of skipped files for linking if dirty files depend on them
+      // But re-parsing them is expensive.
+      // Wait, let's just use the links that are ALREADY in the graph for skipped files.
+      // We only need to run linking for files that were COMPLETELY re-indexed.
+
+      // Phase 3 & 4: Link only the NEWLY indexed files
+      for (const parsed of newParsedFiles) {
         try {
           await this.graph.executeBatch(async () => {
             await this.createInheritanceLinks(parsed, importsMap);
@@ -86,11 +122,10 @@ export class IndexCodeService implements IndexCode {
         }
       }
 
-      // Phase 4: Link calls (batched per file, separate so call failures don't rollback inheritance)
-      for (const parsed of allParsedFiles) {
+      for (const parsed of newParsedFiles) {
         try {
           await this.graph.executeBatch(async () => {
-            await this.createCallLinks(parsed, importsMap, allParsedFiles);
+            await this.createCallLinks(parsed, importsMap, []); // [] because we use importsMap for lookup
           });
         } catch (err) {
           this.logger.error(`Error linking calls for ${parsed.path}:`, err);
@@ -98,9 +133,9 @@ export class IndexCodeService implements IndexCode {
       }
 
       // Phase 5: Directory-level descriptions (parallel)
-      const dirs = Array.from(new Set(files.map(file => dirname(file))));
+      const dirs = Array.from(new Set(allFiles.map(file => dirname(file))));
       await mapWithConcurrency(dirs, 10, async (dir) => {
-        const dirFiles = files.filter(f => dirname(f) === dir);
+        const dirFiles = allFiles.filter(f => dirname(f) === dir);
         try {
           await this.describeCode.describeDirectory(absPath, dir, dirFiles);
         } catch (err) {
@@ -210,6 +245,7 @@ export class IndexCodeService implements IndexCode {
         name: basename(filePath),
         lang: parsed.lang,
         repo_path: repoPath,
+        content_hash: contentHash,
       });
 
       // File → Directory or Repository
@@ -395,7 +431,7 @@ export class IndexCodeService implements IndexCode {
     return undefined;
   }
 
-  private async preScanAll(files: string[]): Promise<ImportsMap> {
+  private async preScanDirty(files: string[]): Promise<ImportsMap> {
     const combinedMap: ImportsMap = new Map();
     const group: { filePath: string; sourceCode: string }[] = [];
 
@@ -408,6 +444,8 @@ export class IndexCodeService implements IndexCode {
         this.logger.warn(`Skipping unreadable file in preScan: ${f}`, err);
       }
     }
+
+    if (group.length === 0) return combinedMap;
 
     const map = this.parser.preScan(group);
     for (const [name, locations] of map) {

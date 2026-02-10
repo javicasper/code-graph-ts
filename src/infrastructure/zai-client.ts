@@ -26,7 +26,7 @@ export class ZaiClient implements DescriptionGenerator {
         private readonly model = "glm-4.7",
     ) { }
 
-    async generateDescription(prompt: string): Promise<string | null> {
+    async generateDescription(prompt: string, options?: { maxTokens?: number }): Promise<string | null> {
         if (!this.apiKey) return null;
 
         try {
@@ -39,7 +39,7 @@ export class ZaiClient implements DescriptionGenerator {
                 },
                 body: JSON.stringify({
                     model: this.model,
-                    max_tokens: 150, // Keep descriptions concise
+                    max_tokens: options?.maxTokens ?? 150,
                     messages: [
                         {
                             role: "user",

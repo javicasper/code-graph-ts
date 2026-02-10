@@ -37,8 +37,16 @@ export class DescribeCodeService implements DescribeCode {
             const dirName = basename(dirPath);
             const relPath = relative(repoPath, dirPath);
             const fileList = files.map(f => basename(f)).join(", ");
+            const contentHash = this.computeHash(fileList);
+
+            const storedHash = await this.graph.getContentHash("Directory", { path: dirPath });
+            if (storedHash === contentHash) {
+                this.logger.debug(`Skipping description for directory ${relPath} (unchanged)`);
+                return;
+            }
 
             this.logger.info(`Generating description for directory ${relPath}...`);
+            // ... prompt ...
 
             const prompt = `
 Describe brevísimamente el propósito de este directorio en 1 o 2 frases concisas.

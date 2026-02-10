@@ -172,3 +172,10 @@ export interface ComplexityResult {
   lineNumber?: number;
   complexity?: number;
 }
+
+// ── Ask (RAG Q&A) ────────────────────────────────────────────────
+
+export interface AskResult {
+  answer: string;
+  sources: { name: string; kind: string; path: string; lineNumber?: number; score: number }[];
+}

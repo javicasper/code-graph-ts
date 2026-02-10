@@ -39,7 +39,10 @@ export class ManageRepositoriesService implements ManageRepositories {
       this.graph.runQuery(`MATCH (n:Function) ${where} RETURN count(n) as c`, params),
       this.graph.runQuery(`MATCH (n:Class) ${where} RETURN count(n) as c`, params),
       this.graph.runQuery(`MATCH (n:Variable) ${where} RETURN count(n) as c`, params),
-      this.graph.runQuery("MATCH ()-[r]->() RETURN count(r) as c"),
+      this.graph.runQuery(
+        `MATCH (n) ${repoPath ? "WHERE n.repo_path = $repoPath" : ""} MATCH (n)-[r]->() RETURN count(r) as c`,
+        params
+      ),
     ]);
 
     return {

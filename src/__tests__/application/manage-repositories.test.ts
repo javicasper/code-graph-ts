@@ -18,6 +18,8 @@ function mockGraphRepository(): GraphRepository {
     setNodeEmbedding: vi.fn(),
     vectorSearch: vi.fn(),
     getContentHash: vi.fn(),
+    getRepositoryFileHashes: vi.fn().mockResolvedValue({}),
+    getImportsMapForFiles: vi.fn().mockResolvedValue(new Map()),
   };
 }
 

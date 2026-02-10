@@ -9,6 +9,7 @@ interface ModelConfig {
 
 interface Task {
     prompt: string;
+    maxTokens: number;
     resolve: (value: string | null) => void;
     retries: number;
 }
@@ -32,11 +33,11 @@ export class MultiModelZaiClient implements DescriptionGenerator {
         this.pool = configs.map(c => ({ ...c, active: 0 }));
     }
 
-    async generateDescription(prompt: string): Promise<string | null> {
+    async generateDescription(prompt: string, options?: { maxTokens?: number }): Promise<string | null> {
         if (!this.apiKey) return null;
 
         return new Promise((resolve) => {
-            this.queue.push({ prompt, resolve, retries: 0 });
+            this.queue.push({ prompt, maxTokens: options?.maxTokens ?? 150, resolve, retries: 0 });
             this.processQueue();
         });
     }
@@ -67,7 +68,7 @@ export class MultiModelZaiClient implements DescriptionGenerator {
                 },
                 body: JSON.stringify({
                     model: slot.name,
-                    max_tokens: 150,
+                    max_tokens: task.maxTokens,
                     messages: [{ role: "user", content: task.prompt }],
                 }),
             });

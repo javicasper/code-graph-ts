@@ -8,6 +8,7 @@ import type {
   AnalyzeCode,
   WatchFiles,
   ManageRepositories,
+  AskCode,
   JobStore,
   Logger,
 } from "./domain/ports.js";
@@ -28,6 +29,7 @@ import { AnalyzeCodeService } from "./application/analyze-code.js";
 import { WatchFilesService } from "./application/watch-files.js";
 import { ManageRepositoriesService } from "./application/manage-repositories.js";
 import { DoctorService } from "./application/doctor.js";
+import { AskCodeService } from "./application/ask-code.js";
 
 export interface AppServices {
   graph: GraphRepository;
@@ -38,6 +40,7 @@ export interface AppServices {
   analyzeCode: AnalyzeCode;
   watchFiles: WatchFiles;
   manageRepos: ManageRepositories;
+  askCode: AskCode;
   doctor: DoctorService;
   jobs: JobStore;
   logger: Logger;
@@ -77,6 +80,7 @@ export function createAppServices(config: AppConfig): AppServices {
   const analyzeCode = new AnalyzeCodeService(graph);
   const watchFiles = new WatchFilesService(indexCode, describeCode, logger);
   const manageRepos = new ManageRepositoriesService(graph);
+  const askCode = new AskCodeService(semanticSearch, graph, descriptionGenerator, logger);
   const doctor = new DoctorService(
     graph,
     descriptionGenerator,
@@ -94,6 +98,7 @@ export function createAppServices(config: AppConfig): AppServices {
     analyzeCode,
     watchFiles,
     manageRepos,
+    askCode,
     doctor,
     jobs,
     logger
