@@ -1,5 +1,7 @@
 
+import crypto from "node:crypto";
 import { resolve, dirname, basename, relative, extname } from "node:path";
+import { mapWithConcurrency } from "../domain/utils.js";
 import ignore from "ignore";
 import type {
   IndexCode,
@@ -21,7 +23,7 @@ import { resolveSymbol } from "../domain/symbol-resolver.js";
 export class IndexCodeService implements IndexCode {
   constructor(
     private readonly fs: FileSystem,
-    private readonly graph: GraphWriter,
+    private readonly graph: GraphRepository,
     private readonly parser: LanguageParser,
     private readonly describeCode: DescribeCode,
     private readonly jobs: JobStore,
@@ -58,18 +60,20 @@ export class IndexCodeService implements IndexCode {
       // Phase 1: Pre-scan all files to build ImportsMap
       const importsMap = await this.preScanAll(files);
 
-      // Phase 2: Parse & insert nodes (each file in its own transaction)
-      const allParsedFiles: ParsedFile[] = [];
-      for (const filePath of files) {
+      // Phase 2: Parse & insert nodes (parallel processing of files)
+      const allParsedFiles: ParsedFile[] = await mapWithConcurrency(files, 4, async (filePath) => {
         try {
           const parsed = await this.indexFile(filePath, absPath, importsMap, isDependency);
-          if (parsed) allParsedFiles.push(parsed);
+
+          const current = this.jobs.get(jobId);
+          this.jobs.update(jobId, { filesProcessed: (current?.filesProcessed ?? 0) + 1 });
+
+          return parsed;
         } catch (err) {
           this.logger.error(`Error parsing ${filePath}:`, err);
+          return null;
         }
-        const current = this.jobs.get(jobId);
-        this.jobs.update(jobId, { filesProcessed: (current?.filesProcessed ?? 0) + 1 });
-      }
+      }).then(results => results.filter((p): p is ParsedFile => p !== null));
 
       // Phase 3: Link inheritance (batched per file)
       for (const parsed of allParsedFiles) {
@@ -93,19 +97,22 @@ export class IndexCodeService implements IndexCode {
         }
       }
 
-      // Phase 5: Directory-level descriptions
-      const dirs = new Set<string>();
-      for (const file of files) dirs.add(dirname(file));
-      for (const dir of dirs) {
+      // Phase 5: Directory-level descriptions (parallel)
+      const dirs = Array.from(new Set(files.map(file => dirname(file))));
+      await mapWithConcurrency(dirs, 10, async (dir) => {
         const dirFiles = files.filter(f => dirname(f) === dir);
         try {
           await this.describeCode.describeDirectory(absPath, dir, dirFiles);
         } catch (err) {
           this.logger.error(`Error describing directory ${dir}:`, err);
         }
-      }
+      });
+      const completedAt = new Date();
+      const durationMs = completedAt.getTime() - job.startedAt.getTime();
+      const durationSec = (durationMs / 1000).toFixed(1);
 
-      this.jobs.update(jobId, { status: "completed", completedAt: new Date() });
+      this.jobs.update(jobId, { status: "completed", completedAt });
+      this.logger.info(`Indexing completed in ${durationSec}s`);
     } catch (err) {
       this.jobs.update(jobId, {
         status: "failed",
@@ -123,16 +130,39 @@ export class IndexCodeService implements IndexCode {
     importsMap: ImportsMap,
     isDependency = false,
   ): Promise<ParsedFile | null> {
+    const sourceCode = await this.fs.readFile(filePath);
+    const contentHash = crypto.createHash("sha256").update(sourceCode).digest("hex");
+    const storedHash = await this.graph.getContentHash("File", { path: filePath });
+
     const parser = this.getParserForFile(filePath);
     if (!parser) return null;
 
-    const sourceCode = await this.fs.readFile(filePath);
     const parsed = parser.parse(sourceCode, filePath, isDependency);
     parsed.repoPath = repoPath;
     parsed.source = sourceCode;
 
+    // IMPORTANT: If hash matches, the structure and description are already in the graph.
+    // We only return 'parsed' so that the caller can use it for Phase 3/4 (linking) if needed,
+    // but we skip all the expensive database and AI work.
+    if (storedHash === contentHash) {
+      return parsed;
+    }
+
+    let previousHashes: Record<string, string> = {};
+
     // Batch all graph writes in a single transaction
     await this.graph.executeBatch(async () => {
+      // Collect old hashes BEFORE deleting (to preserve incremental AI descriptions)
+      const oldSymbols = await this.graph.runQuery(
+        `MATCH (f:File {path: $path})-[r:CONTAINS]->(s) 
+         WHERE (s:Function OR s:Class OR s:Variable) 
+         RETURN s.name as name, s.content_hash as hash`,
+        { path: filePath }
+      );
+      for (const row of oldSymbols) {
+        if (row.name && row.hash) previousHashes[row.name as string] = row.hash as string;
+      }
+
       // Remove existing file nodes (for re-indexing)
       await this.graph.deleteFileNodes(filePath);
 
@@ -146,12 +176,7 @@ export class IndexCodeService implements IndexCode {
         "CONTAINS"
       );
 
-      // After structural indexing, trigger semantic description
-      try {
-        await this.describeCode.describeFile(parsed);
-      } catch (error) {
-        this.logger.error(`Error describing file ${filePath}:`, error);
-      }
+      // After structural indexing, trigger semantic description - MOVED OUTSIDE TRANSACTION
 
       await this.mergeParsedData(parsed, repoPath, importsMap);
 
@@ -305,6 +330,13 @@ export class IndexCodeService implements IndexCode {
         );
       }
     });
+
+    // After structural indexing, trigger semantic description
+    try {
+      await this.describeCode.describeFile(parsed, previousHashes);
+    } catch (error) {
+      this.logger.error(`Error describing file ${filePath}:`, error);
+    }
 
     return parsed;
   }

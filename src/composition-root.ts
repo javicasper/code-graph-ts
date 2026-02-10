@@ -14,7 +14,7 @@ import type {
 import { Neo4jGraphRepository } from "./infrastructure/neo4j-graph-repository.js";
 import { NodeFileSystem } from "./infrastructure/node-filesystem.js";
 import { ConsoleLogger } from "./infrastructure/console-logger.js";
-import { ZaiClient } from "./infrastructure/zai-client.js";
+import { MultiModelZaiClient } from "./infrastructure/multi-model-zai-client.js";
 import { LocalEmbeddingClient } from "./infrastructure/local-embedding.js";
 import { JavaScriptParser } from "./domain/parsers/javascript.js";
 import { TypeScriptParser } from "./domain/parsers/typescript.js";
@@ -62,10 +62,9 @@ export function createAppServices(config: AppConfig): AppServices {
   // Default to empty/no-op implementations caused problems in previous attempts,
   // so we will instantiate the real clients but they might return null/empty if config is missing.
   // ZaiClient handles missing apiKey gracefully.
-  const descriptionGenerator = new ZaiClient(
+  const descriptionGenerator = new MultiModelZaiClient(
     config.zaiApiKey ?? "",
-    config.zaiBaseUrl,
-    config.zaiDescriptionModel
+    logger
   );
   const embeddingGenerator = new LocalEmbeddingClient();
 

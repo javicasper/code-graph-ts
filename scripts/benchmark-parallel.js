@@ -4,17 +4,15 @@ import "dotenv/config";
 const API_KEY = process.env.ZAI_API_KEY;
 const BASE_URL = "https://api.z.ai/api/anthropic/v1/messages";
 
-// Configuración de modelos con sus límites específicos
-const MODEL_CONFIGS = [
-    { name: "glm-4.5", limit: 10 },
+// Estrategia propuesta: 18 slots en total
+const MODEL_POOL = [
     { name: "glm-4.7", limit: 3 },
-    { name: "glm-4.5-air", limit: 5 },
     { name: "glm-4.6", limit: 3 },
-    { name: "glm-4-plus", limit: 20 },
-    { name: "glm-4.5-airx", limit: 5 },
-    { name: "glm-4.7-flash", limit: 1 }
+    { name: "glm-4.5-air", limit: 5 },
+    { name: "glm-4.5", limit: 7 }
 ];
 
+const TOTAL_REQUESTS = 36; // 2 ráfagas completas de los 18 slots
 const SAMPLE_PROMPT = "Di 'OK' y nada más.";
 
 async function testModel(modelName) {
@@ -36,57 +34,56 @@ async function testModel(modelName) {
 
         const latency = Date.now() - start;
         if (!response.ok) {
-            return { ok: false, status: response.status, latency };
+            return { ok: false, status: response.status, latency, modelName };
         }
-        return { ok: true, latency };
+        return { ok: true, latency, modelName };
     } catch (error) {
-        return { ok: false, status: error.message, latency: Date.now() - start };
+        return { ok: false, status: error.message, latency: Date.now() - start, modelName };
     }
 }
 
-async function benchmarkModelIndependent(config) {
-    console.log(`\n� Probando ${config.name} con concurrencia ${config.limit}...`);
+async function runCombinedBenchmark() {
+    console.log(`🚀 Probando COMBINACIÓN PARALELA (Pool de 18 slots)`);
+    console.log(`📡 Modelos: ${MODEL_POOL.map(m => `${m.name}(${m.limit})`).join(", ")}\n`);
 
-    // Vamos a lanzar 2 rondas de su límite para ver estabilidad
-    const totalRequests = config.limit * 2;
     const start = Date.now();
 
-    // Lanzamos todas en paralelo (su límite máximo)
-    const promises = Array.from({ length: totalRequests }, () => testModel(config.name));
-    const results = await Promise.all(promises);
+    // Creamos la lista de tareas: cada tarea asignada a un modelo respetando su límite
+    const allPromises = [];
+    for (const config of MODEL_POOL) {
+        // Lanzamos 2 ráfagas de su límite para este modelo
+        for (let i = 0; i < config.limit * 2; i++) {
+            allPromises.push(testModel(config.name));
+        }
+    }
+
+    console.log(`⏳ Lanzando ${allPromises.length} peticiones simultáneas...`);
+    const results = await Promise.all(allPromises);
 
     const totalTime = (Date.now() - start) / 1000;
     const successes = results.filter(r => r.ok).length;
-    const avgLatency = Math.round(results.reduce((acc, r) => acc + r.latency, 0) / results.length);
+    const errors = results.filter(r => !r.ok);
 
-    return {
-        Modelo: config.name,
-        Límite: config.limit,
-        Éxitos: `${successes}/${totalRequests}`,
-        LatenciaMedia: `${avgLatency}ms`,
-        "Desc/seg": (successes / totalTime).toFixed(2),
-        Estado: successes === totalRequests ? "✅ OK" : "⚠️ Inestable"
-    };
+    console.log("\n📊 Resultado del Pool Combinado:");
+    console.log(`- Tiempo total: ${totalTime.toFixed(2)}s`);
+    console.log(`- Éxitos: ${successes}/${results.length}`);
+    console.log(`- Rendimiento: ${(successes / totalTime).toFixed(2)} desc/seg`);
+
+    if (errors.length > 0) {
+        console.warn("\n⚠️ Errores detectados:");
+        const errorStats = {};
+        errors.forEach(e => {
+            const key = `${e.modelName} (${e.status})`;
+            errorStats[key] = (errorStats[key] || 0) + 1;
+        });
+        console.table(errorStats);
+    } else {
+        console.log("\n✅ ¡Perfecto! Ningún error de Rate Limit.");
+    }
 }
 
-async function run() {
-    if (!API_KEY) {
-        console.error("❌ ZAI_API_KEY no encontrada.");
-        return;
-    }
-
-    console.log("🚀 Iniciando Benchmark Independiente por Modelo\n");
-    const summary = [];
-
-    for (const config of MODEL_CONFIGS) {
-        const result = await benchmarkModelIndependent(config);
-        summary.push(result);
-        // Pequeño respiro entre modelos
-        await new Promise(r => setTimeout(r, 1000));
-    }
-
-    console.log("\n📊 Resumen de Rendimiento (Independiente):");
-    console.table(summary);
+if (!API_KEY) {
+    console.error("❌ ZAI_API_KEY no encontrada.");
+} else {
+    runCombinedBenchmark().catch(console.error);
 }
-
-run().catch(console.error);

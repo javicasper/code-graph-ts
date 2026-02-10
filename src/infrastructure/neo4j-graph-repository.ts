@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import neo4j, { type Driver, type Session, type ManagedTransaction } from "neo4j-driver";
 import type { GraphRepository, QueryResultRows } from "../domain/ports.js";
 import type { SemanticSearchResult } from "../domain/types.js";
@@ -37,8 +38,8 @@ const VECTOR_INDEXES = [
 // ── Repository implementation ───────────────────────────────────
 
 export class Neo4jGraphRepository implements GraphRepository {
-  private driver: Driver;
-  private batchTx: ManagedTransaction | null = null;
+  private readonly driver: Driver;
+  private readonly storage = new AsyncLocalStorage<ManagedTransaction>();
 
   constructor(uri: string, username: string, password: string) {
     this.driver = neo4j.driver(uri, neo4j.auth.basic(username, password));
@@ -64,12 +65,9 @@ export class Neo4jGraphRepository implements GraphRepository {
     const session = this.driver.session();
     try {
       await session.executeWrite(async (tx) => {
-        this.batchTx = tx;
-        try {
+        await this.storage.run(tx, async () => {
           await fn();
-        } finally {
-          this.batchTx = null;
-        }
+        });
       });
     } finally {
       await session.close();
@@ -80,9 +78,10 @@ export class Neo4jGraphRepository implements GraphRepository {
     cypher: string,
     params: Record<string, unknown> = {},
   ): Promise<QueryResultRows> {
-    if (this.batchTx) {
-      const result = await this.batchTx.run(cypher, params);
-      return result.records.map((r) => r.toObject());
+    const tx = this.storage.getStore();
+    if (tx) {
+      const result = await tx.run(cypher, params);
+      return result.records.map((r: any) => r.toObject());
     }
     const session = this.driver.session();
     try {
@@ -109,7 +108,8 @@ export class Neo4jGraphRepository implements GraphRepository {
         CALL db.index.vector.queryNodes('directory_embeddings', $limit, $embedding) YIELD node, score RETURN node, score
       }
       RETURN node.name as name, labels(node) as labels, node.path as path,
-             node.line_number as line_number, node.description as description, score
+             node.line_number as line_number, node.description as description, 
+             node.repo_path as repo_path, score
       ORDER BY score DESC
       LIMIT $limit
     `;
@@ -120,8 +120,9 @@ export class Neo4jGraphRepository implements GraphRepository {
       name: (row.name as string) || (row.path as string)?.split('/').pop() || (row.path as string) || "unknown",
       kind: (row.labels as string[]).find(l => ["Function", "Class", "Variable", "File", "Directory"].includes(l))?.toLowerCase() ?? "unknown",
       path: row.path as string,
-      lineNumber: typeof row.line_number === 'object' ? (row.line_number as any).low : row.line_number as number,
+      lineNumber: (row.line_number && typeof row.line_number === 'object') ? (row.line_number as any).low : row.line_number as number,
       description: row.description as string,
+      repoPath: row.repo_path as string,
       score: row.score as number
     }));
   }
@@ -228,8 +229,9 @@ export class Neo4jGraphRepository implements GraphRepository {
     cypher: string,
     params: Record<string, unknown> = {},
   ): Promise<void> {
-    if (this.batchTx) {
-      await this.batchTx.run(cypher, params);
+    const tx = this.storage.getStore();
+    if (tx) {
+      await tx.run(cypher, params);
       return;
     }
     const session = this.driver.session();

@@ -160,7 +160,7 @@ export interface DescribeCode {
    * Generates semantic descriptions and embeddings for symbols in a file.
    * Also generates a description for the file node itself.
    */
-  describeFile(parsedFile: ParsedFile): Promise<SymbolSummary[]>;
+  describeFile(parsedFile: ParsedFile, previousHashes?: Record<string, string>): Promise<SymbolSummary[]>;
 
   /**
    * Generates a semantic description and embedding for a directory node.

@@ -2,7 +2,7 @@
 
 import "dotenv/config";
 import { Command } from "commander";
-import { resolve } from "node:path";
+import { resolve, basename } from "node:path";
 import { loadConfig } from "../../config.js";
 import { createAppServices } from "../../composition-root.js";
 import { startMCPServer } from "../mcp/server.js";
@@ -174,7 +174,8 @@ program
       } else {
         console.log(`Results for "${query}":`);
         for (const r of results) {
-          console.log(`\n[${r.score?.toFixed(3) ?? "?"}] ${r.kind} ${r.name}`);
+          const repoName = r.repoPath ? `[${basename(r.repoPath)}] ` : "";
+          console.log(`\n[${r.score?.toFixed(3) ?? "?"}] ${r.kind} ${repoName}${r.name}`);
           console.log(`  Path: ${r.path}:${r.lineNumber}`);
           console.log(`  Desc: ${r.description}`);
         }

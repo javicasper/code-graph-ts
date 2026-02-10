@@ -12,23 +12,21 @@ export class DescribeCodeService implements DescribeCode {
         private readonly logger: Logger,
     ) { }
 
-    async describeFile(parsedFile: ParsedFile): Promise<SymbolSummary[]> {
-        const results: SymbolSummary[] = [];
-
-        // 1. Process Symbols (Functions, Classes)
+    async describeFile(parsedFile: ParsedFile, previousHashes?: Record<string, string>): Promise<SymbolSummary[]> {
+        const symbolPromises: Promise<SymbolSummary | null>[] = [];
+        // 1. Queue Symbols (Functions, Classes)
         for (const func of parsedFile.functions) {
             if (!func.source) continue;
-            const summary = await this.processSymbol("function", func.name, func.source, parsedFile.path, func.lineNumber);
-            if (summary) results.push(summary);
+            symbolPromises.push(this.processSymbol("function", func.name, func.source, parsedFile.path, func.lineNumber, previousHashes));
         }
 
         for (const cls of parsedFile.classes) {
             if (!cls.source) continue;
-            const summary = await this.processSymbol("class", cls.name, cls.source, parsedFile.path, cls.lineNumber);
-            if (summary) results.push(summary);
+            symbolPromises.push(this.processSymbol("class", cls.name, cls.source, parsedFile.path, cls.lineNumber, previousHashes));
         }
 
-        // 2. Process File itself
+        // 2. Wait for all symbols and process File itself
+        const results = (await Promise.all(symbolPromises)).filter((s): s is SymbolSummary => s !== null);
         await this.processFile(parsedFile);
 
         return results;
@@ -118,11 +116,19 @@ ${sourceCode.slice(0, 2000)}
         source: string,
         filePath: string,
         lineNumber: number,
+        previousHashes?: Record<string, string>,
     ): Promise<SymbolSummary | null> {
         try {
             const contentHash = this.computeHash(source);
             const label = kind === "function" ? "Function" : kind === "class" ? "Class" : "Variable";
-            const storedHash = await this.graph.getContentHash(label, { path: filePath, name });
+
+            // Check provided previousHashes first (more reliable during re-indexing)
+            let storedHash = previousHashes?.[name];
+
+            // If not provided, fallback to checking the graph directly
+            if (storedHash === undefined) {
+                storedHash = await this.graph.getContentHash(label, { path: filePath, name }) ?? undefined;
+            }
 
             if (storedHash === contentHash) {
                 this.logger.debug(`Skipping description for ${name} (unchanged)`);

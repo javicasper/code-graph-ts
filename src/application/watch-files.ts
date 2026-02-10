@@ -91,13 +91,8 @@ export class WatchFilesService {
           this.logger.info(`Re-indexing: ${filePath}`);
           const importsMap = this.importsMapCache.get(repoPath) ?? new Map();
 
-          // 1. Index structure (AST -> Graph)
-          const parsed = await this.indexCode.indexFile(filePath, repoPath, importsMap);
-
-          // 2. Describe & Embed (AI -> Graph)
-          if (parsed) {
-            await this.describeCode.describeFile(parsed);
-          }
+          // 1. Index structure & Describe (now handled inside indexFile)
+          await this.indexCode.indexFile(filePath, repoPath, importsMap);
 
           this.logger.info(`Re-indexed and described: ${filePath}`);
         } catch (err) {

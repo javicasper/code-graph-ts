@@ -126,6 +126,7 @@ export interface SemanticSearchResult {
   path: string;
   lineNumber?: number;
   description: string;
+  repoPath?: string;
   score: number;
 }
 
